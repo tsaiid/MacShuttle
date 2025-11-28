@@ -5,7 +5,7 @@ description = "A native-feeling driver for Contour ShuttlePro v2 on macOS with R
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
-    { name = "Your Name", email = "your.email@example.com" }
+    { name = "I-Ta Tsai" }
 ]
 dependencies = [
     "hidapi>=0.14.0",
@@ -14,8 +14,8 @@ dependencies = [
     "pyobjc-framework-Cocoa>=10.0"
 ]
 
-[tool.uv]
-dev-dependencies = []
+[dependency-groups]
+dev = []
 
 [build-system]
 requires = ["hatchling"]
