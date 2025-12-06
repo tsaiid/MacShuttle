@@ -602,26 +602,53 @@ class ShuttleController(rumps.App):
 
     def handle_shuttle(self, value):
         s_val = self.to_signed(value)
+
+        # 1. 取得「上一次」的絕對值，用來與現在比較
+        # 注意：此時 self.last_shuttle_val 尚未更新
+        old_abs_val = abs(self.last_shuttle_val)
+        current_abs_val = abs(s_val)
+
+        # 更新狀態
         self.last_shuttle_val = s_val
 
+        # 歸零處理：立刻停止
         if s_val == 0:
             self.shuttle_active = False
             return
 
-        if not self.active_profile: return
-
         self.shuttle_active = True
-        abs_val = abs(s_val)
 
+        # 取得當前檔位的速度設定
         speeds = self.active_profile.get("speeds", DEFAULT_CONFIG["profiles"][-1]["speeds"])
-        idx = min(max(abs_val - 1, 0), 6)
+        idx = min(max(current_abs_val - 1, 0), 6)
         interval = speeds[idx] / 1000.0
 
         multiplier = 2
 
-        if time.time() >= self.next_scroll_time:
+        # 2. 判斷是「加速」還是「減速」
+        # 加速: 絕對值變大 (例如 0->1, 3->7)
+        is_accelerating = current_abs_val > old_abs_val
+
+        should_scroll = False
+
+        # 3. 核心邏輯
+        if is_accelerating:
+            # Case A: 加速中 -> 為了跟手性，立即執行，不等待
+            should_scroll = True
+        elif time.time() >= self.next_scroll_time:
+            # Case B: 持續按著或減速中 -> 只有時間到了才執行
+            # 這能防止回彈歸零時 (7->6->5...) 觸發額外的滾動
+            should_scroll = True
+
+        if should_scroll:
             self.perform_scroll(s_val, multiplier)
+            # 重置計時器
             self.next_scroll_time = time.time() + interval
+        elif is_accelerating is False and current_abs_val != old_abs_val:
+            # 額外優化：如果是減速過程但時間還沒到 (例如快速放開)，
+            # 我們雖然不滾動，但要更新下一次觸發的時間間隔，
+            # 避免它還卡在舊的高速設定上。
+             self.next_scroll_time = time.time() + interval
 
     def handle_jog(self, current_val):
         if self.last_jog_val is None:
