@@ -141,6 +141,10 @@ class ShuttleController(rumps.App):
         self.last_button_mask = 0
         self.last_config_mtime = 0
 
+        # [新增] 用於處理加速平滑過渡的屬性
+        self.target_period = 0      # 記錄目標循環時間 (秒)
+        self.is_transitioning = False # 標記是否正處於加速過渡期
+
         self.btn_menu_items = []
         self.speed_menu_items = []
 
@@ -417,7 +421,7 @@ class ShuttleController(rumps.App):
                 is_default = True
 
         if not target_profile or is_default:
-            msg = f"應用程式: {app_name_snapshot}\\n目前使用預設設定 (Default)。\\n\\n是否要為此 App 建立專屬設定檔？"
+            msg = f"應用程式: {app_name_snapshot}\n目前使用預設設定 (Default)。\n\n是否要為此 App 建立專屬設定檔？"
             if self.show_confirmation_dialog("建立新設定檔", msg):
                 self.create_new_profile_for_current_app(app_name_snapshot)
             return
@@ -452,7 +456,7 @@ class ShuttleController(rumps.App):
         p_name = target_profile.get("name")
         new_val = self.show_input_dialog(
             title=f"設定 Button {btn_id} ({p_name})",
-            message=f"請輸入按鍵 (例如: q, enter, command+c)\\n留空則清除功能。",
+            message=f"請輸入按鍵 (例如: q, enter, command+c)\n留空則清除功能。",
             default_text=current
         )
         if new_val is not None:
@@ -471,7 +475,7 @@ class ShuttleController(rumps.App):
         current = str(target_profile["speeds"][index])
         new_val = self.show_input_dialog(
             title=f"設定速度 Level {index+1}",
-            message=f"請輸入滾動間隔 (毫秒)\\n當前設定檔: {target_profile.get('name')}",
+            message=f"請輸入滾動間隔 (毫秒)\n當前設定檔: {target_profile.get('name')}",
             default_text=current
         )
         if new_val is not None:
@@ -600,55 +604,102 @@ class ShuttleController(rumps.App):
                 action = self.active_profile["buttons"].get(str(i + 1))
                 if action: self.perform_key(action)
 
+    def get_period_by_speed(self, speed_val):
+        """根據速度值 (1-7) 取得設定檔中的週期時間 (秒)"""
+        # [修正] 增加安全檢查：如果 active_profile 為 None，使用預設值
+        if self.active_profile:
+            speeds = self.active_profile.get("speeds", DEFAULT_CONFIG["profiles"][-1]["speeds"])
+        else:
+            # Fallback 到預設設定 (Global)
+            speeds = DEFAULT_CONFIG["profiles"][-1]["speeds"]
+
+        idx = min(max(abs(speed_val) - 1, 0), 6)
+        return speeds[idx] / 1000.0
+
     def handle_shuttle(self, value):
         s_val = self.to_signed(value)
 
-        # 1. 取得「上一次」的絕對值，用來與現在比較
-        # 注意：此時 self.last_shuttle_val 尚未更新
-        old_abs_val = abs(self.last_shuttle_val)
-        current_abs_val = abs(s_val)
+        # =================================================================
+        # 1. 狀態變化偵測 (對應 AHK: HandleOuterRing)
+        # =================================================================
+        if s_val != self.last_shuttle_val:
 
-        # 更新狀態
-        self.last_shuttle_val = s_val
+            # [Step A] 狀態改變時，重置過渡狀態 (SetTimer, 0 equivalent)
+            self.is_transitioning = False
 
-        # 歸零處理：立刻停止
-        if s_val == 0:
-            self.shuttle_active = False
-            return
+            # [Step B] 歸零處理：立刻停止
+            if s_val == 0:
+                self.shuttle_active = False
+                self.last_shuttle_val = s_val
+                return
 
-        self.shuttle_active = True
+            self.shuttle_active = True
 
-        # 取得當前檔位的速度設定
-        speeds = self.active_profile.get("speeds", DEFAULT_CONFIG["profiles"][-1]["speeds"])
-        idx = min(max(current_abs_val - 1, 0), 6)
-        interval = speeds[idx] / 1000.0
+            # [Step C] 計算新舊週期 (Period)
+            new_period = self.get_period_by_speed(s_val)
 
-        multiplier = 2
+            old_period = 0
+            # 只有當舊速度不為 0 時，計算 old_period 才有意義
+            if self.last_shuttle_val != 0:
+                old_period = self.get_period_by_speed(self.last_shuttle_val)
 
-        # 2. 判斷是「加速」還是「減速」
-        # 加速: 絕對值變大 (例如 0->1, 3->7)
-        is_accelerating = current_abs_val > old_abs_val
+            current_abs = abs(s_val)
+            old_abs = abs(self.last_shuttle_val)
 
-        should_scroll = False
+            # [Step D] 判斷加減速狀態 & 計算延遲 (WaitDelay)
+            wait_delay = 0.0
 
-        # 3. 核心邏輯
-        if is_accelerating:
-            # Case A: 加速中 -> 為了跟手性，立即執行，不等待
-            should_scroll = True
-        elif time.time() >= self.next_scroll_time:
-            # Case B: 持續按著或減速中 -> 只有時間到了才執行
-            # 這能防止回彈歸零時 (7->6->5...) 觸發額外的滾動
-            should_scroll = True
+            if current_abs > old_abs and self.last_shuttle_val != 0:
+                # --- 加速邏輯 ---
+                # 延遲 = 差值的一半 (避免太快暴衝)
+                wait_delay = abs(old_period - new_period) / 2.0
+            elif current_abs < old_abs and self.last_shuttle_val != 0:
+                # --- 減速邏輯 ---
+                # 延遲 = 兩者平均值 (填補時間空隙，模擬慣性)
+                wait_delay = (old_period + new_period) / 2.0
+            else:
+                # --- 穩定狀態或從靜止啟動 ---
+                # 不延遲，直接設定為新週期 (下面的邏輯會立即執行)
+                wait_delay = 0.0
 
-        if should_scroll:
-            self.perform_scroll(s_val, multiplier)
-            # 重置計時器
-            self.next_scroll_time = time.time() + interval
-        elif is_accelerating is False and current_abs_val != old_abs_val:
-            # 額外優化：如果是減速過程但時間還沒到 (例如快速放開)，
-            # 我們雖然不滾動，但要更新下一次觸發的時間間隔，
-            # 避免它還卡在舊的高速設定上。
-             self.next_scroll_time = time.time() + interval
+            # 更新記錄
+            self.last_shuttle_val = s_val
+
+            # [Step E] 執行過渡 Timer 設定
+            # 人類感知閾值 (約 40ms = 0.04s)，如果延遲太短直接執行以免無感
+            now = time.time()
+            if wait_delay < 0.04:
+                # 立即執行一次滾動
+                self.perform_scroll(s_val, 2)
+                # 設定下一次觸發時間為標準週期
+                self.next_scroll_time = now + new_period
+                # 確保不處於過渡狀態
+                self.is_transitioning = False
+            else:
+                # 設定過渡期
+                self.is_transitioning = True
+                self.target_period = new_period
+                # 下一次執行時間 = 現在 + 過渡延遲
+                self.next_scroll_time = now + wait_delay
+
+        # =================================================================
+        # 2. 持續滾動檢查 (對應 AHK: AutoScroll Timer)
+        # =================================================================
+        elif self.shuttle_active:
+            now = time.time()
+            if now >= self.next_scroll_time:
+                # 執行滾動
+                self.perform_scroll(s_val, 2)
+
+                # [新增] 如果剛剛是執行「過渡的一次性 Timer」
+                # 執行完這次動作後，立刻將 Timer 設回目標的穩定循環週期
+                if self.is_transitioning:
+                    self.next_scroll_time = now + self.target_period
+                    self.is_transitioning = False
+                else:
+                    # 穩定狀態，使用當前速度的週期
+                    current_period = self.get_period_by_speed(s_val)
+                    self.next_scroll_time = now + current_period
 
     def handle_jog(self, current_val):
         if self.last_jog_val is None:
@@ -703,7 +754,9 @@ class ShuttleController(rumps.App):
                     if len(data) > JOG_INDEX:
                         self.handle_jog(data[JOG_INDEX])
 
-                if self.shuttle_active and self.last_shuttle_val != 0:
+                if self.shuttle_active:
+                    # 如果處於滾動狀態，即使沒有新數據也要持續呼叫 handle_shuttle
+                    # 以便觸發時間檢查邏輯
                     self.handle_shuttle(self.last_shuttle_val)
 
             except Exception as e:
