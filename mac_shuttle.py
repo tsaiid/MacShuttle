@@ -141,9 +141,14 @@ class ShuttleController(rumps.App):
         self.last_button_mask = 0
         self.last_config_mtime = 0
 
-        # [新增] 用於處理加速平滑過渡的屬性
+        # [新增/修改] 用於處理加速平滑過渡與啟動緩衝的屬性
         self.target_period = 0      # 記錄目標循環時間 (秒)
         self.is_transitioning = False # 標記是否正處於加速過渡期
+
+        # [新增] 啟動緩衝相關
+        self.is_startup_pending = False  # 是否正處於「剛起步觀察期」
+        self.startup_check_time = 0      # 觀察期結束的時間點 (timestamp)
+        self.STARTUP_DELAY = 0.08        # 觀察期秒數 (對應 AHK 的 80ms)
 
         self.btn_menu_items = []
         self.speed_menu_items = []
@@ -616,6 +621,31 @@ class ShuttleController(rumps.App):
         idx = min(max(abs(speed_val) - 1, 0), 6)
         return speeds[idx] / 1000.0
 
+    def execute_startup(self):
+        """
+        [新增] 啟動緩衝結束後執行的函式 (對應 AHK: ExecuteStartup)
+        """
+        # 1. 緩衝期結束，標記解除
+        self.is_startup_pending = False
+
+        # 2. 檢查當前速度 (如果在等待期間使用者又停下來了)
+        s_val = self.last_shuttle_val
+        if s_val == 0:
+            return
+
+        # 3. 計算週期
+        final_period = self.get_period_by_speed(s_val)
+        if final_period == 0:
+            return
+
+        # 4. 立即執行第一槍 (達成無延遲感的啟動)
+        self.perform_scroll(s_val, 2)
+
+        # 5. 設定循環 Timer 進入穩定狀態
+        self.shuttle_active = True
+        self.next_scroll_time = time.time() + final_period
+        self.is_transitioning = False # 確保不會誤判為過渡
+
     def handle_shuttle(self, value):
         s_val = self.to_signed(value)
 
@@ -624,68 +654,80 @@ class ShuttleController(rumps.App):
         # =================================================================
         if s_val != self.last_shuttle_val:
 
-            # [Step A] 狀態改變時，重置過渡狀態 (SetTimer, 0 equivalent)
-            self.is_transitioning = False
-
-            # [Step B] 歸零處理：立刻停止
+            # [Step A] 歸零處理：立刻停止
             if s_val == 0:
                 self.shuttle_active = False
+                self.is_transitioning = False
+                self.is_startup_pending = False
                 self.last_shuttle_val = s_val
                 return
 
-            self.shuttle_active = True
+            # [Step B] 啟動緩衝邏輯
 
-            # [Step C] 計算新舊週期 (Period)
+            # 情況 1: 正在觀察期內 (例如 0->1 剛發生，尚未觸發，馬上又變成 2)
+            if self.is_startup_pending:
+                # 只更新數值，不執行動作，等待 execute_startup 抓取最新值
+                self.last_shuttle_val = s_val
+                return
+
+            # 情況 2: 從靜止啟動 (0 -> X)
+            if self.last_shuttle_val == 0:
+                self.is_startup_pending = True
+                self.startup_check_time = time.time() + self.STARTUP_DELAY
+                self.last_shuttle_val = s_val
+                return
+
+            # =================================================================
+            # 以下為「已經在轉動中」的變速邏輯 (1 -> 2 或 2 -> 1)
+            # =================================================================
+
+            # 先重置過渡狀態
+            self.is_transitioning = False
+
             new_period = self.get_period_by_speed(s_val)
-
-            old_period = 0
-            # 只有當舊速度不為 0 時，計算 old_period 才有意義
-            if self.last_shuttle_val != 0:
-                old_period = self.get_period_by_speed(self.last_shuttle_val)
+            old_period = self.get_period_by_speed(self.last_shuttle_val)
 
             current_abs = abs(s_val)
             old_abs = abs(self.last_shuttle_val)
 
-            # [Step D] 判斷加減速狀態 & 計算延遲 (WaitDelay)
             wait_delay = 0.0
 
-            if current_abs > old_abs and self.last_shuttle_val != 0:
+            if current_abs > old_abs:
                 # --- 加速邏輯 ---
                 # 延遲 = 差值的一半 (避免太快暴衝)
                 wait_delay = abs(old_period - new_period) / 2.0
-            elif current_abs < old_abs and self.last_shuttle_val != 0:
+            elif current_abs < old_abs:
                 # --- 減速邏輯 ---
                 # 延遲 = 兩者平均值 (填補時間空隙，模擬慣性)
                 wait_delay = (old_period + new_period) / 2.0
             else:
-                # --- 穩定狀態或從靜止啟動 ---
-                # 不延遲，直接設定為新週期 (下面的邏輯會立即執行)
+                # 穩定狀態
                 wait_delay = 0.0
 
             # 更新記錄
             self.last_shuttle_val = s_val
 
-            # [Step E] 執行過渡 Timer 設定
-            # 人類感知閾值 (約 40ms = 0.04s)，如果延遲太短直接執行以免無感
+            # [Step C] 執行過渡 Timer 設定
             now = time.time()
+            # 人類感知閾值 (約 40ms = 0.04s)
             if wait_delay < 0.04:
                 # 立即執行一次滾動
                 self.perform_scroll(s_val, 2)
                 # 設定下一次觸發時間為標準週期
                 self.next_scroll_time = now + new_period
-                # 確保不處於過渡狀態
-                self.is_transitioning = False
+                self.shuttle_active = True
             else:
                 # 設定過渡期
                 self.is_transitioning = True
                 self.target_period = new_period
-                # 下一次執行時間 = 現在 + 過渡延遲
                 self.next_scroll_time = now + wait_delay
+                self.shuttle_active = True
 
         # =================================================================
         # 2. 持續滾動檢查 (對應 AHK: AutoScroll Timer)
         # =================================================================
         elif self.shuttle_active:
+            # 注意：如果在 Startup Pending 期間，shuttle_active 會是 False，不會進來這裡
             now = time.time()
             if now >= self.next_scroll_time:
                 # 執行滾動
@@ -731,7 +773,6 @@ class ShuttleController(rumps.App):
     def run_logic_loop(self):
         """
         [背景執行緒] 主邏輯迴圈
-        只負責 HID I/O，不碰 UI
         """
         while self.is_running:
             if not self.is_enabled:
@@ -746,6 +787,12 @@ class ShuttleController(rumps.App):
                     continue
 
             try:
+                # [新增] 檢查啟動緩衝 Timer 是否到期
+                if self.is_startup_pending:
+                    if time.time() >= self.startup_check_time:
+                        self.execute_startup()
+
+                # 讀取 HID
                 data = self.device.read(64)
                 if data:
                     self.handle_buttons(data)
@@ -754,9 +801,10 @@ class ShuttleController(rumps.App):
                     if len(data) > JOG_INDEX:
                         self.handle_jog(data[JOG_INDEX])
 
+                # 如果處於滾動狀態，即使沒有新數據也要持續呼叫 handle_shuttle
+                # 以便觸發 AutoScroll 的時間檢查邏輯
+                # 注意：如果正在 startup pending，shuttle_active 為 False，這行不會執行，這是正確的
                 if self.shuttle_active:
-                    # 如果處於滾動狀態，即使沒有新數據也要持續呼叫 handle_shuttle
-                    # 以便觸發時間檢查邏輯
                     self.handle_shuttle(self.last_shuttle_val)
 
             except Exception as e:
