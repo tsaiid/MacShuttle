@@ -40,21 +40,23 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
     var iconDisconnected: NSImage?
     
     func applicationDidFinishLaunching(_ aNotification: Notification) {
-        // Paths
-        // If we are in a .app bundle, resources are in Contents/Resources
-        // Config should be relative to the App Bundle itself (parent folder)
-        
-        let bundleURL = Bundle.main.bundleURL
-        let parentDir = bundleURL.deletingLastPathComponent()
-        
-        // Check if we are running as a bare executable or inside a bundle
-        if bundleURL.pathExtension == "app" {
-             configPath = parentDir.appendingPathComponent("shuttle_config.json")
+        // Setup Config Path in Application Support
+        let fileManager = FileManager.default
+        if let appSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            let appDir = appSupportURL.appendingPathComponent("MacShuttle")
+            
+            // Create directory if it doesn't exist
+            do {
+                try fileManager.createDirectory(at: appDir, withIntermediateDirectories: true, attributes: nil)
+            } catch {
+                print("Error creating Application Support directory: \(error)")
+            }
+            
+            configPath = appDir.appendingPathComponent("shuttle_config.json")
+            print("Config path: \(configPath.path)")
         } else {
-             // Development / Raw binary mode
-             let fileManager = FileManager.default
-             let currentDir = URL(fileURLWithPath: fileManager.currentDirectoryPath)
-             configPath = currentDir.appendingPathComponent("shuttle_config.json")
+            // Fallback
+            configPath = URL(fileURLWithPath: fileManager.currentDirectoryPath).appendingPathComponent("shuttle_config.json")
         }
         
         // Load Assets
@@ -89,9 +91,15 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
         
         // Setup Notifications
         UNUserNotificationCenter.current().delegate = self
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
             if let error = error {
                 print("Notification permission error: \(error)")
+            }
+            print("Notification permission granted: \(granted)")
+            if granted {
+                DispatchQueue.main.async {
+                    self.showNotification(title: "MacShuttle", message: "應用程式已啟動 (Notification Test)")
+                }
             }
         }
         
