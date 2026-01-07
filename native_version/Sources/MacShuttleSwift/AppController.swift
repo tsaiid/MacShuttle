@@ -1,7 +1,8 @@
 import Cocoa
 import Foundation
+import UserNotifications
 
-class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSMenuDelegate, NSUserNotificationCenterDelegate {
+class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSMenuDelegate, UNUserNotificationCenterDelegate {
     
     var statusItem: NSStatusItem!
     var shuttleDevice: ShuttleDevice!
@@ -87,7 +88,12 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
         iconDisconnected?.isTemplate = true
         
         // Setup Notifications
-        NSUserNotificationCenter.default.delegate = self
+        UNUserNotificationCenter.current().delegate = self
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
+            if let error = error {
+                print("Notification permission error: \(error)")
+            }
+        }
         
         // Load Config
         loadConfig()
@@ -115,16 +121,22 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
     
     // MARK: - Notifications
     
-    func userNotificationCenter(_ center: NSUserNotificationCenter, shouldPresent notification: NSUserNotification) -> Bool {
-        return true
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .list, .sound])
     }
     
     func showNotification(title: String, message: String) {
-        let notification = NSUserNotification()
-        notification.title = title
-        notification.informativeText = message
-        notification.soundName = NSUserNotificationDefaultSoundName
-        NSUserNotificationCenter.default.deliver(notification)
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = message
+        content.sound = UNNotificationSound.default
+        
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                print("Notification error: \(error)")
+            }
+        }
     }
     
     // MARK: - Config

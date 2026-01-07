@@ -15,7 +15,7 @@ class ShuttleDevice {
     weak var delegate: ShuttleDeviceDelegate?
     
     let vid: Int = 0x0b33
-    let pid: Int = 0x0030
+    // PIDs: ShuttlePRO v2 (0x0030), ShuttleXpress (0x0020), ShuttlePRO v1 (0x0010)
     
     // Indices based on Python code
     let SHUTTLE_INDEX = 0
@@ -30,12 +30,15 @@ class ShuttleDevice {
     private func setupHID() {
         manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
         
-        let deviceCriteria: [String: Any] = [
-            kIOHIDVendorIDKey: vid,
-            kIOHIDProductIDKey: pid
+        // Match any of these devices
+        let deviceCriteria: [[String: Any]] = [
+            [kIOHIDVendorIDKey: vid, kIOHIDProductIDKey: 0x0030], // Pro v2
+            [kIOHIDVendorIDKey: vid, kIOHIDProductIDKey: 0x0020], // Xpress
+            [kIOHIDVendorIDKey: vid, kIOHIDProductIDKey: 0x0010], // Pro v1
+            [kIOHIDVendorIDKey: vid, kIOHIDProductIDKey: 0x0011]  // Pro v1 Alt?
         ]
         
-        IOHIDManagerSetDeviceMatching(manager!, deviceCriteria as CFDictionary)
+        IOHIDManagerSetDeviceMatchingMultiple(manager!, deviceCriteria as CFArray)
         
         let matchCallback: IOHIDDeviceCallback = { context, result, sender, device in
             let mySelf = Unmanaged<ShuttleDevice>.fromOpaque(context!).takeUnretainedValue()
