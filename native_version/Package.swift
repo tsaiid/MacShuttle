@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "MacShuttleSwift",
     platforms: [
-        .macOS(.v11)
+        .macOS(.v12)
     ],
     products: [
         .executable(name: "MacShuttle", targets: ["MacShuttleSwift"])

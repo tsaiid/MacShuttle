@@ -334,69 +334,84 @@ struct SpeedRow: View {
     let level: Int
     @Binding var value: Int
     @State private var text: String = ""
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         HStack(spacing: 12) {
             Text("Level \(level)")
                 .frame(width: 60, alignment: .leading)
 
-            TextField("ms", text: Binding(
-                get: { text },
-                set: { newValue in
-                    let filtered = newValue.filter { "0123456789".contains($0) }
+            TextField("ms", text: $text)
+                .focused($isFocused)
+                .onChange(of: text) { newValue in
+                    // Step 1: Filter to only digits
+                    var sanitized = newValue.filter { $0.isNumber }
 
-                    if text != filtered {
-                        text = filtered
-                    } else if text != newValue {
-                         // Case: "600" -> "600a". Filtered is "600". Text is "600".
-                         // We must force update to remove 'a'.
-                         // Simple assignment might be optimized out by SwiftUI if values match.
-                         // But for now, we try plain assignment.
-                         text = filtered
+                    // Step 2: Remove leading zeros (e.g., "0123" -> "123", "007" -> "7")
+                    while sanitized.count > 1 && sanitized.hasPrefix("0") {
+                        sanitized.removeFirst()
                     }
 
-                    if let intVal = Int(filtered) {
-                        if intVal != value {
-                            value = intVal
-                        }
-                    } else if filtered.isEmpty {
-                         if value != 0 {
-                            value = 0
-                        }
+                    // Step 3: If it's just "0", convert to "1" (minimum is 1)
+                    if sanitized == "0" {
+                        sanitized = "1"
+                    }
+
+                    // Step 4: Update text if sanitized is different
+                    if sanitized != newValue {
+                        text = sanitized
+                        return
+                    }
+
+                    // Step 5: Sync with the Int binding
+                    if let intVal = Int(sanitized), intVal >= 1 {
+                        value = intVal
                     }
                 }
-            ))
-            .onChange(of: value) { newValue in
-                if let intText = Int(text), intText != newValue {
-                    text = String(newValue)
-                } else if text.isEmpty && newValue == 0 {
-                     text = "0"
-                } else if text != String(newValue) {
-                    // Case where text might be "01" and value is 1, or just out of sync
-                    text = String(newValue)
+                .onChange(of: isFocused) { focused in
+                    if !focused {
+                        // When losing focus, ensure value is valid and text is synced
+                        if text.isEmpty || (Int(text) ?? 0) < 1 {
+                            value = max(1, value)
+                        }
+                        text = String(value)
+                    }
                 }
-            }
-            .onAppear {
-                text = String(value)
-            }
-            .textFieldStyle(RoundedBorderTextFieldStyle())
-            .frame(width: 60)
+                .onChange(of: value) { newValue in
+                    // Ensure value is always at least 1
+                    let safeValue = max(1, newValue)
+                    if safeValue != newValue {
+                        value = safeValue
+                        return
+                    }
+                    // Always update text if it doesn't match the value
+                    // This handles Reset to Defaults and slider/stepper changes
+                    let textValue = Int(text) ?? 0
+                    if textValue != safeValue {
+                        text = String(safeValue)
+                    }
+                }
+                .onAppear {
+                    // Ensure initial value is at least 1
+                    if value < 1 {
+                        value = 1
+                    }
+                    text = String(value)
+                }
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+                .frame(width: 60)
 
             Stepper("", value: $value, in: 1...Int.max)
                 .labelsHidden()
 
             Slider(
                 value: Binding(
-                    get: { Double(min(value, 1000)) },
-                    set: { value = InputValidation(Int($0)) }
+                    get: { Double(max(1, min(value, 1000))) },
+                    set: { value = max(1, Int($0)) }
                 ),
                 in: 1...1000
             )
             .frame(width: 150)
         }
-    }
-
-    func InputValidation(_ val: Int) -> Int {
-        return max(1, val)
     }
 }
