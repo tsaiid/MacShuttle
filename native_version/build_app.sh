@@ -31,6 +31,7 @@ cp Info.plist "${APP_BUNDLE}/Contents/"
 cp assets/icon-active-Template.png "${APP_BUNDLE}/Contents/Resources/"
 cp assets/icon-inactive-Template.png "${APP_BUNDLE}/Contents/Resources/"
 cp assets/icon-disconnected-Template.png "${APP_BUNDLE}/Contents/Resources/"
+cp assets/AppIcon.icns "${APP_BUNDLE}/Contents/Resources/"
 
 echo "🔏 Signing App Bundle..."
 # Ad-hoc sign the bundle
