@@ -6,59 +6,96 @@ class InputController {
     
     static let shared = InputController()
     
+    // Create a persistent source tied to the HID System State.
+    // This tells the OS that these events should update the global hardware input state.
+    private let eventSource = CGEventSource(stateID: .hidSystemState)
+    
     private init() {}
     
     func performScroll(direction: Int, multiplier: Int) {
-        // direction: 1 or -1
-        // multiplier: amount
-        // Python: dy = -1 if direction > 0 else 1
-        // mouse.scroll(0, dy * multiplier)
-        // In CGEvent, scroll wheel 1 is Y axis. + is up (usually), - is down.
-        // Python pynput: scroll(0, 1) -> Up.
-        // Shuttle: Right turn (direction > 0) -> usually Scroll Down in content?
-        // Python code: dy = -1 if direction > 0 else 1.
-        // So direction > 0 (Right) -> dy = -1 (Scroll Down).
-        
-        // CGEventScrollWheel1
-        // unit: line or pixel. Pynput uses "steps". CGEvent uses line.
         let scrollY = Int32(direction > 0 ? -1 * multiplier : 1 * multiplier)
-        
-        if let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: scrollY, wheel2: 0, wheel3: 0) {
+        if let event = CGEvent(scrollWheelEvent2Source: eventSource, units: .line, wheelCount: 1, wheel1: scrollY, wheel2: 0, wheel3: 0) {
             event.post(tap: .cghidEventTap)
         }
     }
     
     func performKey(keyDef: String) {
+        // Native Implementation using CGEventSource(.hidSystemState)
+        
         let lower = keyDef.lowercased()
-        var modifiers: CGEventFlags = []
+        var modifiers: [String] = []
         var baseKey = lower
         
+        // 1. Analyze Modifiers
         if lower.contains("+") {
             let parts = lower.split(separator: "+").map { String($0) }
             baseKey = parts.last ?? ""
-            if parts.contains("command") || parts.contains("cmd") { modifiers.insert(.maskCommand) }
-            if parts.contains("shift") { modifiers.insert(.maskShift) }
-            if parts.contains("control") || parts.contains("ctrl") { modifiers.insert(.maskControl) }
-            if parts.contains("option") || parts.contains("alt") { modifiers.insert(.maskAlternate) }
+            
+            if parts.count > 1 {
+                for part in parts.dropLast() {
+                    if part.contains("cmd") || part.contains("command") { modifiers.append("command") }
+                    if part.contains("shift") { modifiers.append("shift") }
+                    if part.contains("ctrl") || part.contains("control") { modifiers.append("control") }
+                    if part.contains("opt") || part.contains("alt") { modifiers.append("option") }
+                }
+            }
         }
+        
+        // 2. Handle Implicit Shift
+        if modifiers.isEmpty && keyDef.count == 1 && keyDef.uppercased() == keyDef && keyDef.lowercased() != keyDef {
+            modifiers.append("shift")
+            baseKey = keyDef.lowercased()
+        }
+        
+        baseKey = baseKey.lowercased()
         
         guard let keyCode = macKeyCodes[baseKey] else {
             print("Unknown key: \(baseKey)")
             return
         }
         
-        // Create Key Down
-        guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true) else { return }
-        keyDown.flags = modifiers
-        keyDown.post(tap: .cghidEventTap)
+        // 3. Execution with .hidSystemState Source
         
-        // Create Key Up
-        // Slight delay is usually good for compatibility, but native events are fast.
-        // Python used 0.15s sleep.
-        usleep(150000) // 150ms
+        let modKeyCodes: [String: CGKeyCode] = [
+            "shift": 56,
+            "control": 59,
+            "option": 58,
+            "command": 55
+        ]
         
-        guard let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false) else { return }
-        keyUp.flags = modifiers
-        keyUp.post(tap: .cghidEventTap)
+        // Step A: Press Modifiers
+        for mod in modifiers {
+            if let modCode = modKeyCodes[mod] {
+                postKeyEvent(keyCode: modCode, keyDown: true)
+            }
+        }
+        
+        // Critical Delay for RDP to recognize modifier state change
+        if !modifiers.isEmpty {
+            usleep(50000) // 50ms
+        }
+        
+        // Step B: Press & Release Main Key
+        postKeyEvent(keyCode: keyCode, keyDown: true)
+        usleep(20000) // 20ms Hold
+        postKeyEvent(keyCode: keyCode, keyDown: false)
+        
+        // Critical Delay before releasing modifiers
+        if !modifiers.isEmpty {
+            usleep(50000) // 50ms
+        }
+        
+        // Step C: Release Modifiers
+        for mod in modifiers.reversed() {
+            if let modCode = modKeyCodes[mod] {
+                postKeyEvent(keyCode: modCode, keyDown: false)
+            }
+        }
+    }
+    
+    private func postKeyEvent(keyCode: CGKeyCode, keyDown: Bool) {
+        // We use the shared eventSource (.hidSystemState) here
+        guard let event = CGEvent(keyboardEventSource: eventSource, virtualKey: keyCode, keyDown: keyDown) else { return }
+        event.post(tap: .cghidEventTap)
     }
 }
