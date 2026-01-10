@@ -134,8 +134,16 @@ struct ProfileDetailView: View {
             HStack {
                 Text("Profile Name:")
                     .foregroundColor(.secondary)
-                TextField("Name", text: $profile.name, onCommit: { onSave() })
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                TextField("Name", text: Binding(
+                    get: { profile.name },
+                    set: { newValue in
+                        if !newValue.isEmpty {
+                            profile.name = newValue
+                            onSave()
+                        }
+                    }
+                ))
+                .textFieldStyle(RoundedBorderTextFieldStyle())
             }
             .padding()
 
@@ -226,11 +234,11 @@ struct ButtonsView: View {
     }
 
     let groups = [
-        ButtonGroup(range: 1...4, title: "First Top Row (1-4)"),
-        ButtonGroup(range: 5...9, title: "Second Top Row (5-9)"),
-        ButtonGroup(range: 10...11, title: "First Palm Buttons (10-11)"),
-        ButtonGroup(range: 12...13, title: "Second Palm Buttons (12-13)"),
-        ButtonGroup(range: 14...15, title: "Wheel Side Buttons (14-15)")
+        ButtonGroup(range: 1...4, title: "First Top Row"),
+        ButtonGroup(range: 5...9, title: "Second Top Row"),
+        ButtonGroup(range: 10...11, title: "First Palm Buttons"),
+        ButtonGroup(range: 12...13, title: "Second Palm Buttons"),
+        ButtonGroup(range: 14...15, title: "Wheel Side Buttons")
     ]
 
     var body: some View {
@@ -288,25 +296,107 @@ struct ShuttleSpeedsView: View {
     var onSave: () -> Void
 
     var body: some View {
-        Form {
-            Section(header: Text("Shuttle Speeds (Transition Delay in ms)")) {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack {
+                    Text("Shuttle Speeds (Transition Delay in ms)")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    Spacer()
+
+                    Button("Reset to Defaults") {
+                        profile.speeds = defaultSpeeds
+                        onSave()
+                    }
+                }
+
                 ForEach(0..<7, id: \.self) { i in
-                    HStack {
-                        Text("Level \(i+1)")
-                            .frame(width: 60, alignment: .leading)
-                        TextField("ms", value: Binding(
+                    SpeedRow(
+                        level: i + 1,
+                        value: Binding(
                             get: { profile.speeds[i] },
                             set: {
                                 profile.speeds[i] = $0
                                 onSave()
                             }
-                        ), formatter: NumberFormatter())
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
-                        .frame(width: 100)
+                        )
+                    )
+                }
+                Spacer()
+            }
+            .padding()
+        }
+    }
+}
+
+struct SpeedRow: View {
+    let level: Int
+    @Binding var value: Int
+    @State private var text: String = ""
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text("Level \(level)")
+                .frame(width: 60, alignment: .leading)
+
+            TextField("ms", text: Binding(
+                get: { text },
+                set: { newValue in
+                    let filtered = newValue.filter { "0123456789".contains($0) }
+
+                    if text != filtered {
+                        text = filtered
+                    } else if text != newValue {
+                         // Case: "600" -> "600a". Filtered is "600". Text is "600".
+                         // We must force update to remove 'a'.
+                         // Simple assignment might be optimized out by SwiftUI if values match.
+                         // But for now, we try plain assignment.
+                         text = filtered
+                    }
+
+                    if let intVal = Int(filtered) {
+                        if intVal != value {
+                            value = intVal
+                        }
+                    } else if filtered.isEmpty {
+                         if value != 0 {
+                            value = 0
+                        }
                     }
                 }
+            ))
+            .onChange(of: value) { newValue in
+                if let intText = Int(text), intText != newValue {
+                    text = String(newValue)
+                } else if text.isEmpty && newValue == 0 {
+                     text = "0"
+                } else if text != String(newValue) {
+                    // Case where text might be "01" and value is 1, or just out of sync
+                    text = String(newValue)
+                }
             }
+            .onAppear {
+                text = String(value)
+            }
+            .textFieldStyle(RoundedBorderTextFieldStyle())
+            .frame(width: 60)
+
+            Stepper("", value: $value, in: 1...Int.max)
+                .labelsHidden()
+
+            Slider(
+                value: Binding(
+                    get: { Double(min(value, 1000)) },
+                    set: { value = InputValidation(Int($0)) }
+                ),
+                in: 1...1000
+            )
+            .frame(width: 150)
         }
-        .padding()
+    }
+
+    func InputValidation(_ val: Int) -> Int {
+        return max(1, val)
     }
 }
