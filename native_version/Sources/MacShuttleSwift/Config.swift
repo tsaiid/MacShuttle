@@ -1,13 +1,45 @@
 import Foundation
 
-struct ShuttleProfile: Codable {
+struct ShuttleProfile: Codable, Hashable, Identifiable {
+    var id = UUID()
     var name: String
     var apps: [String]
     var speeds: [Int] // 7 levels, in ms
     var buttons: [String: String] // "1": "cmd+c"
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, apps, speeds, buttons
+    }
+
+    init(name: String, apps: [String], speeds: [Int], buttons: [String: String]) {
+        self.id = UUID()
+        self.name = name
+        self.apps = apps
+        self.speeds = speeds
+        self.buttons = buttons
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        apps = try container.decode([String].self, forKey: .apps)
+        speeds = try container.decode([Int].self, forKey: .speeds)
+        buttons = try container.decode([String: String].self, forKey: .buttons)
+        // Use existing ID if present, otherwise generate new one
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(apps, forKey: .apps)
+        try container.encode(speeds, forKey: .speeds)
+        try container.encode(buttons, forKey: .buttons)
+    }
 }
 
-struct ShuttleConfig: Codable {
+struct ShuttleConfig: Codable, Hashable {
     var profiles: [ShuttleProfile]
 }
 
