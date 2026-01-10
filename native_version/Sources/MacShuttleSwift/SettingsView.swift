@@ -38,6 +38,16 @@ struct SettingsView: View {
                 Divider()
 
                 HStack(spacing: 12) {
+                    // App Icon
+                    if let appIcon = NSImage(named: "AppIcon") {
+                        Image(nsImage: appIcon)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 32, height: 32)
+                    }
+
+                    Spacer()
+
                     Button(action: addProfile) {
                         Image(nsImage: NSImage(named: NSImage.addTemplateName)!)
                             .resizable()
@@ -56,8 +66,6 @@ struct SettingsView: View {
                     .buttonStyle(PlainButtonStyle())
                     .disabled(selectedProfileId == nil)
                     .help("Remove Profile")
-
-                    Spacer()
                 }
                 .padding(.vertical, 8)
                 .padding(.horizontal, 12)
