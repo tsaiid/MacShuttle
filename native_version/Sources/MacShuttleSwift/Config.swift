@@ -93,7 +93,8 @@ let macKeyCodes: [String: CGKeyCode] = [
     "f4": 118, "f5": 96, "f6": 97, "f7": 98, "f8": 100, "f9": 101, "f10": 109,
     "f11": 103, "f12": 111, "command": 55, "shift": 56, "capslock": 57, "option": 58,
     "control": 59, "right_command": 54, "right_shift": 60, "right_option": 61,
-    "right_control": 62, "fn": 63
+    "right_control": 62, "fn": 63,
+    "home": 115, "end": 119, "pageup": 116, "pagedown": 121
 ]
 
 import CoreGraphics
