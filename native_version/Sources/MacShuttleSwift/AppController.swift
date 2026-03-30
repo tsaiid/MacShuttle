@@ -44,7 +44,35 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
     var iconInactive: NSImage?
     var iconDisconnected: NSImage?
 
+    func checkAccessibilityPermissions() {
+        let options: [String: Any] = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: false]
+        let isTrusted = AXIsProcessTrustedWithOptions(options as CFDictionary)
+
+        if !isTrusted {
+            print("Accessibility permissions not granted. Prompting user...")
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                let alert = NSAlert()
+                alert.messageText = "輔助使用權限已重置 (Accessibility Required)"
+                alert.informativeText = "為了讓 MacShuttle 模擬按鍵與滾動，請在「系統設定 > 安全性與隱私權 > 輔助使用」中勾選 MacShuttle。\n\n由於每次 Build 都會更換簽署身分，如果你已看到 MacShuttle 在清單中，請先「取消勾選再重新勾選」即可生效。"
+                alert.addButton(withTitle: "開啟系統設定 (Open Settings)")
+                alert.addButton(withTitle: "稍後再說 (Later)")
+
+                let response = alert.runModal()
+                if response == .alertFirstButtonReturn {
+                    let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
+                    NSWorkspace.shared.open(url)
+                }
+            }
+        } else {
+            print("Accessibility permissions granted.")
+        }
+    }
+
     func applicationDidFinishLaunching(_ aNotification: Notification) {
+        // Check Accessibility Permissions
+        checkAccessibilityPermissions()
+
         // Setup Config Path in Application Support
         let fileManager = FileManager.default
         if let appSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {

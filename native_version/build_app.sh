@@ -37,6 +37,10 @@ echo "🔏 Signing App Bundle..."
 # Ad-hoc sign the bundle
 codesign --force --deep --sign - "${APP_BUNDLE}"
 
+echo "🧹 Resetting TCC Accessibility Permissions..."
+# This helps avoid the manual "minus/remove" step in System Settings
+tccutil reset Accessibility com.tsaiid.MacShuttle || true
+
 echo "✅ Build Complete."
 echo "🚀 You can now move '${APP_BUNDLE}' to your /Applications folder."
 echo "   Or run: open native_version/${APP_BUNDLE}"
