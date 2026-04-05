@@ -7,7 +7,6 @@ class InputController {
     static let shared = InputController()
     
     // Create a persistent source tied to the HID System State.
-    // This tells the OS that these events should update the global hardware input state.
     private let eventSource = CGEventSource(stateID: .hidSystemState)
     
     private init() {}
@@ -20,11 +19,31 @@ class InputController {
     }
     
     func performKey(keyDef: String) {
-        let lower = keyDef.lowercased()
+        let (baseKey, modifiers) = parseKeyDefinition(keyDef)
+        
+        guard let keyCode = macKeyCodes[baseKey] else {
+            print("Unknown key: \(baseKey)")
+            return
+        }
+        
+        // 分流實作：
+        // 1. 若無修飾鍵 (modifiers.isEmpty)，直接使用 CGEvent 以獲得最高反應速度（適合 Jog/Shuttle 快速轉動）。
+        // 2. 若有修飾鍵 (例如 Z 或 Cmd+C)，使用 NSAppleScript 以確保在 RDP/Windows App 下的穩定性。
+        if modifiers.isEmpty {
+            postKeyEvent(keyCode: keyCode, keyDown: true)
+            postKeyEvent(keyCode: keyCode, keyDown: false)
+        } else {
+            performAppleScriptKey(keyCode: keyCode, modifiers: modifiers)
+        }
+    }
+    
+    private func parseKeyDefinition(_ keyDef: String) -> (baseKey: String, modifiers: [String]) {
+        let trimmedKeyDef = keyDef.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmedKeyDef.lowercased()
         var modifiers: [String] = []
         var baseKey = lower
         
-        // 1. Analyze Modifiers
+        // 1. Analyze Explicit Modifiers (e.g., "cmd+c")
         if lower.contains("+") {
             let parts = lower.split(separator: "+").map { String($0) }
             baseKey = parts.last ?? ""
@@ -40,55 +59,43 @@ class InputController {
             }
         }
         
-        // 2. Handle Implicit Shift
-        if modifiers.isEmpty && keyDef.count == 1 && keyDef.uppercased() == keyDef && keyDef.lowercased() != keyDef {
+        // 2. Handle Implicit Shift (e.g., uppercase "Z")
+        if modifiers.isEmpty && trimmedKeyDef.count == 1 &&
+            trimmedKeyDef.uppercased() == trimmedKeyDef &&
+            trimmedKeyDef.lowercased() != trimmedKeyDef {
             modifiers.append("shift")
-            baseKey = keyDef.lowercased()
+            baseKey = trimmedKeyDef.lowercased()
         }
         
-        baseKey = baseKey.lowercased().trimmingCharacters(in: .whitespaces)
+        return (baseKey.lowercased().trimmingCharacters(in: .whitespaces), modifiers)
+    }
+    
+    private func performAppleScriptKey(keyCode: CGKeyCode, modifiers: [String]) {
+        var scriptSource = "tell application \"System Events\" to key code \(keyCode)"
         
-        guard let keyCode = macKeyCodes[baseKey] else {
-            print("Unknown key: \(baseKey)")
-            return
-        }
-        
-        // 分流實作：
-        // 1. 若無修飾鍵 (modifiers.isEmpty)，直接使用 CGEvent 以獲得最高反應速度（適合 Jog/Shuttle 快速轉動）。
-        // 2. 若有修飾鍵 (例如 Z 或 Cmd+C)，使用 NSAppleScript 以確保在 RDP/Windows App 下的穩定性。
-        
-        if modifiers.isEmpty {
-            postKeyEvent(keyCode: keyCode, keyDown: true)
-            postKeyEvent(keyCode: keyCode, keyDown: false)
-        } else {
-            // AppleScript Execution (mimics osascript for RDP compatibility)
-            var scriptSource = "tell application \"System Events\" to key code \(keyCode)"
-            
-            let appleScriptModifiers = modifiers.map { mod -> String in
-                switch mod {
-                case "command": return "command down"
-                case "shift": return "shift down"
-                case "control": return "control down"
-                case "option": return "option down"
-                default: return ""
-                }
-            }.filter { !$0.isEmpty }.joined(separator: ", ")
-            
-            if !appleScriptModifiers.isEmpty {
-                scriptSource += " using {\(appleScriptModifiers)}"
+        let appleScriptModifiers = modifiers.map { mod -> String in
+            switch mod {
+            case "command": return "command down"
+            case "shift": return "shift down"
+            case "control": return "control down"
+            case "option": return "option down"
+            default: return ""
             }
-            
-            if let script = NSAppleScript(source: scriptSource) {
-                var error: NSDictionary?
-                script.executeAndReturnError(&error)
-                if let err = error {
-                    print("AppleScript Error: \(err)")
-                }
+        }.filter { !$0.isEmpty }.joined(separator: ", ")
+        
+        if !appleScriptModifiers.isEmpty {
+            scriptSource += " using {\(appleScriptModifiers)}"
+        }
+        
+        if let script = NSAppleScript(source: scriptSource) {
+            var error: NSDictionary?
+            script.executeAndReturnError(&error)
+            if let err = error {
+                print("AppleScript Error: \(err)")
             }
         }
     }
     
-    // Kept for backward compatibility or direct calls if needed
     private func postKeyEvent(keyCode: CGKeyCode, keyDown: Bool) {
         guard let event = CGEvent(keyboardEventSource: eventSource, virtualKey: keyCode, keyDown: keyDown) else { return }
         event.post(tap: .cghidEventTap)
