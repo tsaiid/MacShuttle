@@ -53,12 +53,17 @@ class InputController {
             return
         }
         
-        // 3. AppleScript Execution (mimics osascript for RDP compatibility)
-        // This is the only method proven to be robust against mouse interference in RDP
+        // 分流實作：
+        // 1. 若無修飾鍵 (modifiers.isEmpty)，直接使用 CGEvent 以獲得最高反應速度（適合 Jog/Shuttle 快速轉動）。
+        // 2. 若有修飾鍵 (例如 Z 或 Cmd+C)，使用 NSAppleScript 以確保在 RDP/Windows App 下的穩定性。
         
-        var scriptSource = "tell application \"System Events\" to key code \(keyCode)"
-        
-        if !modifiers.isEmpty {
+        if modifiers.isEmpty {
+            postKeyEvent(keyCode: keyCode, keyDown: true)
+            postKeyEvent(keyCode: keyCode, keyDown: false)
+        } else {
+            // AppleScript Execution (mimics osascript for RDP compatibility)
+            var scriptSource = "tell application \"System Events\" to key code \(keyCode)"
+            
             let appleScriptModifiers = modifiers.map { mod -> String in
                 switch mod {
                 case "command": return "command down"
@@ -69,14 +74,16 @@ class InputController {
                 }
             }.filter { !$0.isEmpty }.joined(separator: ", ")
             
-            scriptSource += " using {\(appleScriptModifiers)}"
-        }
-        
-        if let script = NSAppleScript(source: scriptSource) {
-            var error: NSDictionary?
-            script.executeAndReturnError(&error)
-            if let err = error {
-                print("AppleScript Error: \(err)")
+            if !appleScriptModifiers.isEmpty {
+                scriptSource += " using {\(appleScriptModifiers)}"
+            }
+            
+            if let script = NSAppleScript(source: scriptSource) {
+                var error: NSDictionary?
+                script.executeAndReturnError(&error)
+                if let err = error {
+                    print("AppleScript Error: \(err)")
+                }
             }
         }
     }
