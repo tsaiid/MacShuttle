@@ -20,8 +20,6 @@ class InputController {
     }
     
     func performKey(keyDef: String) {
-        // Native Implementation using CGEventSource(.hidSystemState)
-        
         let lower = keyDef.lowercased()
         var modifiers: [String] = []
         var baseKey = lower
@@ -33,10 +31,11 @@ class InputController {
             
             if parts.count > 1 {
                 for part in parts.dropLast() {
-                    if part.contains("cmd") || part.contains("command") { modifiers.append("command") }
-                    if part.contains("shift") { modifiers.append("shift") }
-                    if part.contains("ctrl") || part.contains("control") { modifiers.append("control") }
-                    if part.contains("opt") || part.contains("alt") { modifiers.append("option") }
+                    let p = part.trimmingCharacters(in: .whitespaces)
+                    if p.contains("cmd") || p.contains("command") { modifiers.append("command") }
+                    if p.contains("shift") { modifiers.append("shift") }
+                    if p.contains("ctrl") || p.contains("control") { modifiers.append("control") }
+                    if p.contains("opt") || p.contains("alt") { modifiers.append("option") }
                 }
             }
         }
@@ -47,54 +46,43 @@ class InputController {
             baseKey = keyDef.lowercased()
         }
         
-        baseKey = baseKey.lowercased()
+        baseKey = baseKey.lowercased().trimmingCharacters(in: .whitespaces)
         
         guard let keyCode = macKeyCodes[baseKey] else {
             print("Unknown key: \(baseKey)")
             return
         }
         
-        // 3. Execution with .hidSystemState Source
+        // 3. AppleScript Execution (mimics osascript for RDP compatibility)
+        // This is the only method proven to be robust against mouse interference in RDP
         
-        let modKeyCodes: [String: CGKeyCode] = [
-            "shift": 56,
-            "control": 59,
-            "option": 58,
-            "command": 55
-        ]
+        var scriptSource = "tell application \"System Events\" to key code \(keyCode)"
         
-        // Step A: Press Modifiers
-        for mod in modifiers {
-            if let modCode = modKeyCodes[mod] {
-                postKeyEvent(keyCode: modCode, keyDown: true)
-            }
-        }
-        
-        // Critical Delay for RDP to recognize modifier state change
         if !modifiers.isEmpty {
-            usleep(50000) // 50ms
+            let appleScriptModifiers = modifiers.map { mod -> String in
+                switch mod {
+                case "command": return "command down"
+                case "shift": return "shift down"
+                case "control": return "control down"
+                case "option": return "option down"
+                default: return ""
+                }
+            }.filter { !$0.isEmpty }.joined(separator: ", ")
+            
+            scriptSource += " using {\(appleScriptModifiers)}"
         }
         
-        // Step B: Press & Release Main Key
-        postKeyEvent(keyCode: keyCode, keyDown: true)
-        usleep(20000) // 20ms Hold
-        postKeyEvent(keyCode: keyCode, keyDown: false)
-        
-        // Critical Delay before releasing modifiers
-        if !modifiers.isEmpty {
-            usleep(50000) // 50ms
-        }
-        
-        // Step C: Release Modifiers
-        for mod in modifiers.reversed() {
-            if let modCode = modKeyCodes[mod] {
-                postKeyEvent(keyCode: modCode, keyDown: false)
+        if let script = NSAppleScript(source: scriptSource) {
+            var error: NSDictionary?
+            script.executeAndReturnError(&error)
+            if let err = error {
+                print("AppleScript Error: \(err)")
             }
         }
     }
     
+    // Kept for backward compatibility or direct calls if needed
     private func postKeyEvent(keyCode: CGKeyCode, keyDown: Bool) {
-        // We use the shared eventSource (.hidSystemState) here
         guard let event = CGEvent(keyboardEventSource: eventSource, virtualKey: keyCode, keyDown: keyDown) else { return }
         event.post(tap: .cghidEventTap)
     }
