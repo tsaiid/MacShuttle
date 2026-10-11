@@ -647,11 +647,14 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
             } else {
                 isTransitioning = true
                 targetPeriod = newPeriod
-                shuttleTimer = Timer.scheduledTimer(withTimeInterval: waitDelay, repeats: false) { _ in
+                let timer = Timer(timeInterval: waitDelay, repeats: false) { [weak self] _ in
+                    guard let self = self else { return }
                     self.performScrollAction()
                     self.startScrollTimer(interval: self.targetPeriod)
                     self.isTransitioning = false
                 }
+                RunLoop.main.add(timer, forMode: .common)
+                shuttleTimer = timer
             }
 
         }
@@ -669,9 +672,11 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
 
     func startScrollTimer(interval: Double) {
         shuttleTimer?.invalidate()
-        shuttleTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
-            self.performScrollAction()
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            self?.performScrollAction()
         }
+        RunLoop.main.add(timer, forMode: .common)
+        shuttleTimer = timer
     }
 
     func performScrollAction() {
