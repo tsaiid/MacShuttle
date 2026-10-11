@@ -47,7 +47,7 @@ let defaultSpeeds = [800, 600, 333, 200, 100, 50, 20]
 
 let defaultProfileWindows = ShuttleProfile(
     name: "Windows Remote",
-    apps: ["Windows App", "Microsoft Remote Desktop", "WindowsApp", "rdp"],
+    apps: ["Windows App", "Microsoft Remote Desktop", "WindowsApp", "rdp", "com.microsoft.rdc.macos", "com.microsoft.rdc.osx"],
     speeds: defaultSpeeds,
     buttons: [
         "1": "q", "2": "7", "3": "5", "4": "6", "5": "d",
@@ -58,7 +58,7 @@ let defaultProfileWindows = ShuttleProfile(
 
 let defaultProfileBrowser = ShuttleProfile(
     name: "Chrome / Browser",
-    apps: ["Google Chrome", "Safari", "Microsoft Edge", "Arc"],
+    apps: ["Google Chrome", "Safari", "Microsoft Edge", "Arc", "com.google.Chrome", "com.apple.Safari"],
     speeds: [500, 300, 150, 80, 40, 20, 10],
     buttons: [
         "1": "command+t",

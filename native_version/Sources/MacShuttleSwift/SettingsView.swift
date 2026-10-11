@@ -179,7 +179,7 @@ struct TargetAppsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Target Application Process Names (case-insensitive)")
+            Text("Target Application Names or Bundle IDs (case-insensitive)")
                 .font(.caption)
                 .foregroundColor(.secondary)
 
@@ -202,7 +202,7 @@ struct TargetAppsView: View {
             .border(Color(NSColor.separatorColor), width: 1)
 
             HStack {
-                TextField("Add App (e.g. Chrome, iTerm2)", text: $newApp, onCommit: {
+                TextField("Add App or Bundle ID (e.g. Chrome, com.google.Chrome)", text: $newApp, onCommit: {
                     addApp()
                 })
                 .textFieldStyle(RoundedBorderTextFieldStyle())

@@ -13,6 +13,7 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
     // State
     var activeProfile: ShuttleProfile?
     var currentAppName: String = ""
+    var currentBundleId: String = ""
     var isEnabled: Bool = true
     var lastButtonMask: UInt32 = 0
     var lastJogVal: Int?
@@ -146,6 +147,7 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
         // Initial app check
         if let app = NSWorkspace.shared.frontmostApplication {
             currentAppName = app.localizedName ?? "Unknown"
+            currentBundleId = app.bundleIdentifier ?? ""
             updateActiveProfile()
         }
 
@@ -294,6 +296,7 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
 
     func updateMenuState() {
         appStatusItem.title = "當前 App: \(currentAppName)"
+        appStatusItem.toolTip = currentBundleId.isEmpty ? nil : "Bundle ID: \(currentBundleId)"
 
         if let profile = activeProfile {
             profileStatusItem.title = "使用設定: \(profile.name)"
@@ -434,9 +437,13 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
         }
 
         // Use default speeds
+        var apps = [currentAppName]
+        if !currentBundleId.isEmpty && currentBundleId != currentAppName {
+            apps.append(currentBundleId)
+        }
         let newProfile = ShuttleProfile(
             name: currentAppName,
-            apps: [currentAppName],
+            apps: apps,
             speeds: [800, 600, 333, 200, 100, 50, 20],
             buttons: [:]
         )
@@ -537,13 +544,17 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
     @objc func appChanged(_ notif: Notification) {
         if let app = notif.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
             let name = app.localizedName ?? "Unknown"
+            let bundleId = app.bundleIdentifier ?? ""
 
             // Ignore system stuff and self
             let selfName = ProcessInfo.processInfo.processName
-            if ["System Events", "loginwindow", "Control Center", "Notification Center", selfName, "MacShuttle", "MacShuttleNative"].contains(name) { return }
+            let selfBundleId = Bundle.main.bundleIdentifier ?? ""
+            if ["System Events", "loginwindow", "Control Center", "Notification Center", selfName, "MacShuttle", "MacShuttleNative"].contains(name) ||
+               (!selfBundleId.isEmpty && bundleId == selfBundleId) { return }
 
-            if name != currentAppName {
+            if name != currentAppName || bundleId != currentBundleId {
                 currentAppName = name
+                currentBundleId = bundleId
                 scrollEngine.reset()
                 updateActiveProfile()
                 updateMenuState()
@@ -554,11 +565,14 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
     func updateActiveProfile() {
         var matched: ShuttleProfile? = nil
 
-        // Exact match
+        // Exact match by localizedName or bundleIdentifier
         for p in config.profiles {
             if p.apps.contains("*") { continue }
-            // Strict match to avoid "2" matching "iTerm2"
-            if p.apps.contains(where: { currentAppName.localizedCaseInsensitiveCompare($0) == .orderedSame }) {
+            // Strict match against localizedName or bundleIdentifier
+            if p.apps.contains(where: { target in
+                target.localizedCaseInsensitiveCompare(currentAppName) == .orderedSame ||
+                (!currentBundleId.isEmpty && target.localizedCaseInsensitiveCompare(currentBundleId) == .orderedSame)
+            }) {
                 matched = p
                 break
             }
