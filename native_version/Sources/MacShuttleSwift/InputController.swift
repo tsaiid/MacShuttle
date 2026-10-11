@@ -9,6 +9,12 @@ class InputController {
     // Create a persistent source tied to the HID System State.
     private let eventSource = CGEventSource(stateID: .hidSystemState)
     
+    // 專屬串行佇列：確保 AppleScript 依序執行且不阻塞主執行緒 (Main RunLoop)
+    private let appleScriptQueue = DispatchQueue(label: "com.macshuttle.applescript", qos: .userInteractive)
+    
+    // 預編譯腳本快取：避免每次重複 Lexing/Parsing 開銷
+    private var scriptCache: [String: NSAppleScript] = [:]
+    
     private init() {}
     
     func performScroll(direction: Int, multiplier: Int) {
@@ -87,7 +93,24 @@ class InputController {
             scriptSource += " using {\(appleScriptModifiers)}"
         }
         
-        if let script = NSAppleScript(source: scriptSource) {
+        appleScriptQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            let script: NSAppleScript
+            if let cached = self.scriptCache[scriptSource] {
+                script = cached
+            } else if let newScript = NSAppleScript(source: scriptSource) {
+                var compileError: NSDictionary?
+                newScript.compileAndReturnError(&compileError)
+                if let err = compileError {
+                    print("AppleScript Compilation Warning: \(err)")
+                }
+                self.scriptCache[scriptSource] = newScript
+                script = newScript
+            } else {
+                return
+            }
+            
             var error: NSDictionary?
             script.executeAndReturnError(&error)
             if let err = error {
