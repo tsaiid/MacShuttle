@@ -17,16 +17,8 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
     var lastButtonMask: UInt32 = 0
     var lastJogVal: Int?
 
-    // Shuttle Logic
-    var shuttleValue: Int = 0
-    var shuttleTimer: Timer?
-    var isTransitioning: Bool = false
-    var targetPeriod: Double = 0
-
-    // Startup Buffer Logic
-    var isStartupPending: Bool = false
-    var startupCheckTime: TimeInterval = 0
-    let STARTUP_DELAY: TimeInterval = 0.08
+    // Shuttle Scroll Engine
+    let scrollEngine = ShuttleScrollEngine()
 
     // UI
     var connectionStatusItem: NSMenuItem!
@@ -327,12 +319,16 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
 
     @objc func toggleEnabled(_ sender: NSMenuItem) {
         isEnabled.toggle()
+        if !isEnabled {
+            scrollEngine.stop()
+        }
         sender.state = isEnabled ? .on : .off
         let isConnected = connectionStatusItem.title.contains("已連接")
         updateIcon(connected: isConnected)
     }
 
     func applicationWillTerminate(_ aNotification: Notification) {
+        scrollEngine.stop()
         flushPendingSave()
     }
 
@@ -548,9 +544,7 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
 
             if name != currentAppName {
                 currentAppName = name
-                shuttleValue = 0 // Reset shuttle
-                shuttleTimer?.invalidate()
-                shuttleTimer = nil
+                scrollEngine.reset()
                 updateActiveProfile()
                 updateMenuState()
             }
@@ -581,6 +575,7 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
         }
 
         activeProfile = matched
+        scrollEngine.speeds = matched?.speeds ?? defaultSpeeds
     }
 
     // MARK: - Device Delegate
@@ -637,109 +632,10 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
     }
 
     func shuttleDevice(_ device: ShuttleDevice, didUpdateShuttle value: Int) {
-        guard isEnabled else { return }
-
-        // Logic from Python "HandleShuttle"
-        if value != shuttleValue {
-            // Change detected
-
-            if value == 0 {
-                // Stop
-                shuttleValue = 0
-                shuttleTimer?.invalidate()
-                shuttleTimer = nil
-                isTransitioning = false
-                isStartupPending = false
-                return
-            }
-
-            // Startup Buffer
-            if isStartupPending {
-                // Still in pending, just update target
-                shuttleValue = value
-                return
-            }
-
-            if shuttleValue == 0 {
-                // Starting from 0
-                isStartupPending = true
-                shuttleValue = value
-
-                DispatchQueue.main.asyncAfter(deadline: .now() + STARTUP_DELAY) {
-                    self.executeStartup()
-                }
-                return
-            }
-
-            // Transition logic (changing speed while moving)
-            isTransitioning = false
-            let newPeriod = getPeriod(speed: value)
-            let oldPeriod = getPeriod(speed: shuttleValue)
-            var waitDelay: Double = 0
-
-            if abs(value) > abs(shuttleValue) {
-                waitDelay = abs(oldPeriod - newPeriod) / 2.0
-            } else if abs(value) < abs(shuttleValue) {
-                waitDelay = (oldPeriod + newPeriod) / 2.0
-            }
-
-            shuttleValue = value
-
-            // Re-schedule
-            shuttleTimer?.invalidate()
-
-            if waitDelay < 0.04 {
-                // Instant
-                performScrollAction()
-                startScrollTimer(interval: newPeriod)
-            } else {
-                isTransitioning = true
-                targetPeriod = newPeriod
-                let timer = Timer(timeInterval: waitDelay, repeats: false) { [weak self] _ in
-                    guard let self = self else { return }
-                    self.performScrollAction()
-                    self.startScrollTimer(interval: self.targetPeriod)
-                    self.isTransitioning = false
-                }
-                RunLoop.main.add(timer, forMode: .common)
-                shuttleTimer = timer
-            }
-
+        guard isEnabled else {
+            scrollEngine.stop()
+            return
         }
-    }
-
-    func executeStartup() {
-        isStartupPending = false
-        if shuttleValue == 0 { return }
-
-        let period = getPeriod(speed: shuttleValue)
-        performScrollAction()
-        startScrollTimer(interval: period)
-        isTransitioning = false
-    }
-
-    func startScrollTimer(interval: Double) {
-        shuttleTimer?.invalidate()
-        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
-            self?.performScrollAction()
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        shuttleTimer = timer
-    }
-
-    func performScrollAction() {
-        if shuttleValue == 0 { return }
-        let direction = shuttleValue > 0 ? 1 : -1
-        InputController.shared.performScroll(direction: direction, multiplier: 2)
-    }
-
-    func getPeriod(speed: Int) -> Double {
-        guard let profile = activeProfile else { return 0.1 }
-        let idx = min(max(abs(speed) - 1, 0), 6)
-        // Safety check for index
-        if idx < profile.speeds.count {
-            return Double(profile.speeds[idx]) / 1000.0
-        }
-        return 0.1
+        scrollEngine.updateShuttle(value: value)
     }
 }
