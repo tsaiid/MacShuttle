@@ -180,7 +180,11 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
         }
     }
 
-    // MARK: - Config
+    // MARK: - Config Save Queue & Debounce
+
+    private let configSaveQueue = DispatchQueue(label: "com.macshuttle.configSaveQueue", qos: .utility)
+    private var pendingSaveWorkItem: DispatchWorkItem?
+    private var saveSequence: Int = 0
 
     func loadConfig() {
         do {
@@ -189,7 +193,7 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
                 config = try JSONDecoder().decode(ShuttleConfig.self, from: data)
             } else {
                 config = defaultConfig
-                saveConfig()
+                saveConfig(debounce: false)
             }
         } catch {
             print("Config error: \(error)")
@@ -197,14 +201,54 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
         }
     }
 
-    func saveConfig() {
-        do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = .prettyPrinted
-            let data = try encoder.encode(config)
-            try data.write(to: configPath)
-        } catch {
-            print("Save error: \(error)")
+    func saveConfig(debounce: Bool = true, delay: TimeInterval = 0.5) {
+        pendingSaveWorkItem?.cancel()
+
+        guard let currentConfig = self.config, let path = self.configPath else { return }
+
+        saveSequence += 1
+        let currentSeq = saveSequence
+
+        let workItem = DispatchWorkItem { [weak self] in
+            do {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = .prettyPrinted
+                let data = try encoder.encode(currentConfig)
+                try data.write(to: path, options: .atomic)
+            } catch {
+                print("Save error: \(error)")
+            }
+            DispatchQueue.main.async {
+                if self?.saveSequence == currentSeq {
+                    self?.pendingSaveWorkItem = nil
+                }
+            }
+        }
+
+        pendingSaveWorkItem = workItem
+
+        if debounce {
+            configSaveQueue.asyncAfter(deadline: .now() + delay, execute: workItem)
+        } else {
+            configSaveQueue.async(execute: workItem)
+        }
+    }
+
+    func flushPendingSave() {
+        guard let item = pendingSaveWorkItem, !item.isCancelled else { return }
+        item.cancel()
+        pendingSaveWorkItem = nil
+
+        guard let currentConfig = self.config, let path = self.configPath else { return }
+        configSaveQueue.sync {
+            do {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = .prettyPrinted
+                let data = try encoder.encode(currentConfig)
+                try data.write(to: path, options: .atomic)
+            } catch {
+                print("Flush save error: \(error)")
+            }
         }
     }
 
@@ -288,7 +332,13 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
         updateIcon(connected: isConnected)
     }
 
+    func applicationWillTerminate(_ aNotification: Notification) {
+        flushPendingSave()
+    }
+
     @objc func manualReload() {
+        pendingSaveWorkItem?.cancel()
+        pendingSaveWorkItem = nil
         loadConfig()
         updateActiveProfile()
         updateMenuState()
@@ -300,6 +350,7 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
     }
 
     @objc func quitApp() {
+        flushPendingSave()
         NSApplication.shared.terminate(self)
     }
 
@@ -335,6 +386,7 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
 
         // Handle window close to clean up
         NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: nil) { [weak self] _ in
+            self?.flushPendingSave()
             self?.settingsWindow = nil
             self?.settingsStore = nil
         }
@@ -396,7 +448,6 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
         // Insert at beginning
         config.profiles.insert(newProfile, at: 0)
         saveConfig()
-        loadConfig()
         updateActiveProfile()
 
         showNotification(title: "MacShuttle", message: "設定檔建立成功: \(currentAppName)")
@@ -422,7 +473,6 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
             if let idx = config.profiles.firstIndex(where: { $0.name == p.name }) {
                 config.profiles[idx].apps = newApps
                 saveConfig()
-                loadConfig()
                 updateActiveProfile()
                 showNotification(title: "MacShuttle", message: "App 清單已更新")
             }
@@ -453,7 +503,6 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
                     config.profiles[idx].buttons[btnId] = newVal
                 }
                 saveConfig()
-                loadConfig()
                 updateActiveProfile()
                 updateMenuState()
                 showNotification(title: "MacShuttle", message: "Button \(btnId) 已更新")
@@ -480,7 +529,6 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
              if let pIdx = config.profiles.firstIndex(where: { $0.name == p.name }) {
                  config.profiles[pIdx].speeds[idx] = val
                  saveConfig()
-                 loadConfig()
                  updateActiveProfile()
                  updateMenuState()
                  showNotification(title: "MacShuttle", message: "速度已更新")
