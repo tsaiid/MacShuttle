@@ -232,39 +232,202 @@ struct TargetAppsView: View {
     }
 }
 
+class KeyRecorderModel: ObservableObject {
+    @Published var isRecording: Bool = false
+    @Published var heldModifiers: NSEvent.ModifierFlags = []
+    private var monitor: Any?
+
+    func startRecording(onKeyRecorded: @escaping (String) -> Void) {
+        stopRecording()
+        isRecording = true
+        heldModifiers = []
+
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
+            guard let self = self, self.isRecording else { return event }
+
+            if event.type == .flagsChanged {
+                let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                DispatchQueue.main.async {
+                    self.heldModifiers = flags
+                }
+                return event
+            } else if event.type == .keyDown {
+                let canonical = ShortcutFormatter.canonicalString(keyCode: event.keyCode, modifiers: event.modifierFlags)
+                DispatchQueue.main.async {
+                    self.stopRecording()
+                    onKeyRecorded(canonical)
+                }
+                return nil
+            }
+            return event
+        }
+    }
+
+    func stopRecording() {
+        if let m = monitor {
+            NSEvent.removeMonitor(m)
+            monitor = nil
+        }
+        isRecording = false
+        heldModifiers = []
+    }
+
+    deinit {
+        if let m = monitor {
+            NSEvent.removeMonitor(m)
+        }
+    }
+}
+
+struct KeyRecorderButton: View {
+    let buttonId: String
+    @Binding var value: String
+    @Binding var activeRecordingId: String?
+    var onSave: () -> Void
+
+    @StateObject private var recorder = KeyRecorderModel()
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if recorder.isRecording {
+                Button(action: {
+                    recorder.stopRecording()
+                    if activeRecordingId == buttonId {
+                        activeRecordingId = nil
+                    }
+                }) {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: 8, height: 8)
+                        Text(recordingText)
+                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                            .foregroundColor(.primary)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .frame(minWidth: 150, alignment: .center)
+                    .background(Color.accentColor.opacity(0.12))
+                    .cornerRadius(6)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.accentColor, lineWidth: 1.5)
+                    )
+                }
+                .buttonStyle(PlainButtonStyle())
+                .help("點擊以取消錄製")
+
+                Button("取消") {
+                    recorder.stopRecording()
+                    if activeRecordingId == buttonId {
+                        activeRecordingId = nil
+                    }
+                }
+                .buttonStyle(BorderlessButtonStyle())
+                .font(.caption)
+                .foregroundColor(.secondary)
+            } else {
+                Button(action: {
+                    activeRecordingId = buttonId
+                    recorder.startRecording { recordedKey in
+                        value = recordedKey
+                        activeRecordingId = nil
+                        onSave()
+                    }
+                }) {
+                    Text(value.isEmpty ? "點擊錄製" : ShortcutFormatter.displayString(for: value))
+                        .font(.system(size: 13, weight: value.isEmpty ? .regular : .semibold, design: value.isEmpty ? .default : .monospaced))
+                        .foregroundColor(value.isEmpty ? .secondary : .primary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .frame(minWidth: 120, alignment: .center)
+                        .background(Color(NSColor.controlBackgroundColor))
+                        .cornerRadius(6)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(Color(NSColor.separatorColor), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(PlainButtonStyle())
+                .help(value.isEmpty ? "點擊錄製快捷鍵" : "目前綁定: \(value)。點擊重新錄製")
+
+                if !value.isEmpty {
+                    Button(action: {
+                        value = ""
+                        onSave()
+                    }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 13))
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(BorderlessButtonStyle())
+                    .help("清除按鍵設定")
+                }
+            }
+        }
+        .onChange(of: activeRecordingId) { newId in
+            if newId != buttonId && recorder.isRecording {
+                recorder.stopRecording()
+            }
+        }
+        .onDisappear {
+            recorder.stopRecording()
+        }
+    }
+
+    private var recordingText: String {
+        let mods = ShortcutFormatter.modifierDisplayString(modifiers: recorder.heldModifiers)
+        if mods.isEmpty {
+            return "請按下快捷鍵..."
+        } else {
+            return "\(mods) ..."
+        }
+    }
+}
+
 struct ButtonsView: View {
     @Binding var profile: ShuttleProfile
     var onSave: () -> Void
+    @State private var activeRecordingButtonId: String? = nil
 
     struct ButtonGroup {
         let range: ClosedRange<Int>
         let title: String
+        let subtitle: String
     }
 
     let groups = [
-        ButtonGroup(range: 1...4, title: "First Top Row"),
-        ButtonGroup(range: 5...9, title: "Second Top Row"),
-        ButtonGroup(range: 10...11, title: "First Palm Buttons"),
-        ButtonGroup(range: 12...13, title: "Second Palm Buttons"),
-        ButtonGroup(range: 14...15, title: "Wheel Side Buttons")
+        ButtonGroup(range: 1...4, title: "頂部第一排 (First Top Row)", subtitle: "Buttons 1 ~ 4"),
+        ButtonGroup(range: 5...9, title: "頂部第二排 (Second Top Row)", subtitle: "Buttons 5 ~ 9"),
+        ButtonGroup(range: 10...11, title: "左側手掌鍵 (Left Palm Buttons)", subtitle: "Buttons 10 ~ 11"),
+        ButtonGroup(range: 12...13, title: "右側手掌鍵 (Right Palm Buttons)", subtitle: "Buttons 12 ~ 13"),
+        ButtonGroup(range: 14...15, title: "飛輪兩側鍵 (Wheel Side Buttons)", subtitle: "Buttons 14 ~ 15")
     ]
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 ForEach(groups, id: \.title) { group in
-                    VStack(alignment: .leading) {
-                        Text(group.title)
-                            .font(.headline)
-                            .foregroundColor(.primary)
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Text(group.title)
+                                .font(.headline)
+                                .foregroundColor(.primary)
+                            Spacer()
+                            Text(group.subtitle)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
 
                         ForEach(group.range, id: \.self) { i in
                             HStack {
                                 Text("Button \(i)")
+                                    .font(.system(size: 13, weight: .medium))
                                     .frame(width: 80, alignment: .leading)
                                     .foregroundColor(.secondary)
 
-                                ButtonTextField(
+                                KeyRecorderButton(
+                                    buttonId: String(i),
                                     value: Binding(
                                         get: { profile.buttons[String(i)] ?? "" },
                                         set: {
@@ -275,9 +438,10 @@ struct ButtonsView: View {
                                             }
                                             onSave()
                                         }
-                                    )
+                                    ),
+                                    activeRecordingId: $activeRecordingButtonId,
+                                    onSave: onSave
                                 )
-                                .frame(width: 200)
                                 Spacer()
                             }
                         }
@@ -287,15 +451,6 @@ struct ButtonsView: View {
             }
             .padding()
         }
-    }
-}
-
-struct ButtonTextField: View {
-    @Binding var value: String
-
-    var body: some View {
-        TextField("Key (e.g. cmd+c)", text: $value)
-            .textFieldStyle(RoundedBorderTextFieldStyle())
     }
 }
 

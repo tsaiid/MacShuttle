@@ -43,37 +43,8 @@ class InputController {
         }
     }
     
-    private func parseKeyDefinition(_ keyDef: String) -> (baseKey: String, modifiers: [String]) {
-        let trimmedKeyDef = keyDef.trimmingCharacters(in: .whitespacesAndNewlines)
-        let lower = trimmedKeyDef.lowercased()
-        var modifiers: [String] = []
-        var baseKey = lower
-        
-        // 1. Analyze Explicit Modifiers (e.g., "cmd+c")
-        if lower.contains("+") {
-            let parts = lower.split(separator: "+").map { String($0) }
-            baseKey = parts.last ?? ""
-            
-            if parts.count > 1 {
-                for part in parts.dropLast() {
-                    let p = part.trimmingCharacters(in: .whitespaces)
-                    if p.contains("cmd") || p.contains("command") { modifiers.append("command") }
-                    if p.contains("shift") { modifiers.append("shift") }
-                    if p.contains("ctrl") || p.contains("control") { modifiers.append("control") }
-                    if p.contains("opt") || p.contains("alt") { modifiers.append("option") }
-                }
-            }
-        }
-        
-        // 2. Handle Implicit Shift (e.g., uppercase "Z")
-        if modifiers.isEmpty && trimmedKeyDef.count == 1 &&
-            trimmedKeyDef.uppercased() == trimmedKeyDef &&
-            trimmedKeyDef.lowercased() != trimmedKeyDef {
-            modifiers.append("shift")
-            baseKey = trimmedKeyDef.lowercased()
-        }
-        
-        return (baseKey.lowercased().trimmingCharacters(in: .whitespaces), modifiers)
+    func parseKeyDefinition(_ keyDef: String) -> (baseKey: String, modifiers: [String]) {
+        return ShortcutFormatter.parseKeyDefinition(keyDef)
     }
     
     private func performAppleScriptKey(keyCode: CGKeyCode, modifiers: [String]) {
