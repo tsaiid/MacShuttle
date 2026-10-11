@@ -12,6 +12,8 @@ protocol ShuttleDeviceDelegate: AnyObject {
 class ShuttleDevice {
     private var manager: IOHIDManager?
     private var device: IOHIDDevice?
+    private var reportBuffer: UnsafeMutablePointer<UInt8>?
+    private let reportBufferSize = 64
     weak var delegate: ShuttleDeviceDelegate?
     
     let vid: Int = 0x0b33
@@ -64,6 +66,11 @@ class ShuttleDevice {
     
     private func deviceConnected(_ device: IOHIDDevice) {
         print("Shuttle Connected")
+        if let oldDevice = self.device, let oldBuffer = self.reportBuffer {
+            IOHIDDeviceRegisterInputReportCallback(oldDevice, oldBuffer, reportBufferSize, nil, nil)
+            oldBuffer.deallocate()
+            self.reportBuffer = nil
+        }
         self.device = device
         
         let reportCallback: IOHIDReportCallback = { context, result, sender, type, reportId, report, reportLength in
@@ -74,18 +81,37 @@ class ShuttleDevice {
         
         let context = Unmanaged.passUnretained(self).toOpaque()
         // Register for input reports
-        // Note: Buffer size is typically small (e.g., 5-64 bytes)
-        let bufferSize = 64
-        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
-        IOHIDDeviceRegisterInputReportCallback(device, buffer, bufferSize, reportCallback, context)
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: reportBufferSize)
+        self.reportBuffer = buffer
+        IOHIDDeviceRegisterInputReportCallback(device, buffer, reportBufferSize, reportCallback, context)
         
         delegate?.shuttleDeviceDidConnect(self)
     }
     
     private func deviceDisconnected(_ device: IOHIDDevice) {
         print("Shuttle Disconnected")
+        if let buffer = reportBuffer {
+            IOHIDDeviceRegisterInputReportCallback(device, buffer, reportBufferSize, nil, nil)
+            buffer.deallocate()
+            reportBuffer = nil
+        }
         self.device = nil
         delegate?.shuttleDeviceDidDisconnect(self)
+    }
+
+    deinit {
+        if let dev = device, let buffer = reportBuffer {
+            IOHIDDeviceRegisterInputReportCallback(dev, buffer, reportBufferSize, nil, nil)
+        }
+        reportBuffer?.deallocate()
+        reportBuffer = nil
+        
+        if let manager = manager {
+            IOHIDManagerRegisterDeviceMatchingCallback(manager, nil, nil)
+            IOHIDManagerRegisterDeviceRemovalCallback(manager, nil, nil)
+            IOHIDManagerUnscheduleFromRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+            IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+        }
     }
     
     private func handleReport(_ data: [UInt8]) {
