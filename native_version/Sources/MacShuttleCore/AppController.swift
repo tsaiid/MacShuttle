@@ -296,6 +296,10 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
 
         menu.addItem(NSMenuItem.separator())
 
+        let versionItem = NSMenuItem(title: "版本: \(AppVersion.displayString)", action: nil, keyEquivalent: "")
+        versionItem.isEnabled = false
+        menu.addItem(versionItem)
+
         let quitItem = NSMenuItem(title: "離開 (Quit)", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)

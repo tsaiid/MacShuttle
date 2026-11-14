@@ -39,12 +39,17 @@ struct SettingsView: View {
                 Divider()
 
                 HStack(spacing: 12) {
-                    // App Icon
-                    if let appIcon = NSImage(named: "AppIcon") {
-                        Image(nsImage: appIcon)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(width: 32, height: 32)
+                    // App Icon & Version
+                    HStack(spacing: 8) {
+                        if let appIcon = NSImage(named: "AppIcon") {
+                            Image(nsImage: appIcon)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(width: 32, height: 32)
+                        }
+                        Text("v\(AppVersion.shortVersion)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
 
                     Spacer()

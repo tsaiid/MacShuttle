@@ -2,6 +2,20 @@ import Foundation
 import CoreGraphics
 import AppKit
 
+enum AppVersion {
+    static var shortVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+    }
+
+    static var buildNumber: String {
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
+    }
+
+    static var displayString: String {
+        "v\(shortVersion) (\(buildNumber))"
+    }
+}
+
 struct ShuttleProfile: Codable, Hashable, Identifiable {
     var id = UUID()
     var name: String
