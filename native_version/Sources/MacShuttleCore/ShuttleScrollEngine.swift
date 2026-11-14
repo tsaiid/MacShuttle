@@ -63,6 +63,23 @@ class ShuttleScrollEngine {
             return
         }
         
+        // 1.5 跨 0 點直接反轉：清除舊方向定時器與啟動緩衝，立即以新方向啟動
+        let isDirectionReversed = (currentSpeed > 0 && value < 0) || (currentSpeed < 0 && value > 0)
+        if isDirectionReversed {
+            scrollTimer?.invalidate()
+            scrollTimer = nil
+            isTransitioning = false
+            startupWorkItem?.cancel()
+            startupWorkItem = nil
+            isStartupPending = false
+            
+            currentSpeed = value
+            let period = getPeriod(speed: value)
+            performScrollAction()
+            startScrollTimer(interval: period)
+            return
+        }
+        
         // 2. 處於啟動緩衝等待期中，僅更新目標速度
         if isStartupPending {
             currentSpeed = value

@@ -7,14 +7,24 @@ let package = Package(
         .macOS(.v12)
     ],
     products: [
-        .executable(name: "MacShuttle", targets: ["MacShuttleSwift"])
+        .executable(name: "MacShuttle", targets: ["MacShuttle"])
     ],
     dependencies: [],
     targets: [
-        .executableTarget(
-            name: "MacShuttleSwift",
+        .target(
+            name: "MacShuttleCore",
             dependencies: [],
-            path: "Sources/MacShuttleSwift"
+            path: "Sources/MacShuttleCore"
+        ),
+        .executableTarget(
+            name: "MacShuttle",
+            dependencies: ["MacShuttleCore"],
+            path: "Sources/MacShuttle"
+        ),
+        .testTarget(
+            name: "MacShuttleTests",
+            dependencies: ["MacShuttleCore"],
+            path: "Tests/MacShuttleTests"
         )
     ]
 )

@@ -1,0 +1,3 @@
+import MacShuttleCore
+
+MacShuttleApp.main()

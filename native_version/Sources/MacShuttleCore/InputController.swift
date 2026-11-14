@@ -27,7 +27,14 @@ class InputController {
     func performKey(keyDef: String) {
         let (baseKey, modifiers) = parseKeyDefinition(keyDef)
         
-        guard let keyCode = macKeyCodes[baseKey] else {
+        let resolvedKeyCode: CGKeyCode? = macKeyCodes[baseKey] ?? {
+            if baseKey.hasPrefix("key_"), let code = UInt16(baseKey.dropFirst(4)) {
+                return CGKeyCode(code)
+            }
+            return nil
+        }()
+        
+        guard let keyCode = resolvedKeyCode else {
             print("Unknown key: \(baseKey)")
             return
         }

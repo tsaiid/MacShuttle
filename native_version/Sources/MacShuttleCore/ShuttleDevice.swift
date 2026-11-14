@@ -14,6 +14,7 @@ class ShuttleDevice {
     private var device: IOHIDDevice?
     private var reportBuffer: UnsafeMutablePointer<UInt8>?
     private let reportBufferSize = 64
+    private(set) var productName: String = "ShuttleXpress/Pro"
     weak var delegate: ShuttleDeviceDelegate?
     
     let vid: Int = 0x0b33
@@ -56,7 +57,7 @@ class ShuttleDevice {
         IOHIDManagerRegisterDeviceMatchingCallback(manager!, matchCallback, context)
         IOHIDManagerRegisterDeviceRemovalCallback(manager!, removeCallback, context)
         
-        IOHIDManagerScheduleWithRunLoop(manager!, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+        IOHIDManagerScheduleWithRunLoop(manager!, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
         
         let ret = IOHIDManagerOpen(manager!, IOOptionBits(kIOHIDOptionsTypeNone))
         if ret != kIOReturnSuccess {
@@ -72,11 +73,16 @@ class ShuttleDevice {
             self.reportBuffer = nil
         }
         self.device = device
+        if let name = IOHIDDeviceGetProperty(device, kIOHIDProductKey as CFString) as? String, !name.isEmpty {
+            self.productName = name
+        } else {
+            self.productName = "ShuttleXpress/Pro"
+        }
         
         let reportCallback: IOHIDReportCallback = { context, result, sender, type, reportId, report, reportLength in
             let mySelf = Unmanaged<ShuttleDevice>.fromOpaque(context!).takeUnretainedValue()
             let data = UnsafeBufferPointer(start: report, count: reportLength)
-            mySelf.handleReport(Array(data))
+            mySelf.handleReport(data)
         }
         
         let context = Unmanaged.passUnretained(self).toOpaque()
@@ -89,6 +95,7 @@ class ShuttleDevice {
     }
     
     private func deviceDisconnected(_ device: IOHIDDevice) {
+        guard let currentDevice = self.device, CFEqual(currentDevice, device) else { return }
         print("Shuttle Disconnected")
         if let buffer = reportBuffer {
             IOHIDDeviceRegisterInputReportCallback(device, buffer, reportBufferSize, nil, nil)
@@ -96,6 +103,7 @@ class ShuttleDevice {
             reportBuffer = nil
         }
         self.device = nil
+        self.productName = "ShuttleXpress/Pro"
         delegate?.shuttleDeviceDidDisconnect(self)
     }
 
@@ -109,12 +117,12 @@ class ShuttleDevice {
         if let manager = manager {
             IOHIDManagerRegisterDeviceMatchingCallback(manager, nil, nil)
             IOHIDManagerRegisterDeviceRemovalCallback(manager, nil, nil)
-            IOHIDManagerUnscheduleFromRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+            IOHIDManagerUnscheduleFromRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
             IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
         }
     }
     
-    private func handleReport(_ data: [UInt8]) {
+    private func handleReport(_ data: UnsafeBufferPointer<UInt8>) {
         // Python logic:
         // shuttle = data[SHUTTLE_INDEX]
         // jog = data[JOG_INDEX]

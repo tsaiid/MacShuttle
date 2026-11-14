@@ -3,7 +3,17 @@ import Foundation
 import SwiftUI
 import UserNotifications
 
-class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSMenuDelegate, UNUserNotificationCenterDelegate {
+public enum MacShuttleApp {
+    public static func main() {
+        let app = NSApplication.shared
+        let delegate = AppController()
+        app.delegate = delegate
+        app.setActivationPolicy(.accessory)
+        app.run()
+    }
+}
+
+class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSMenuDelegate, UNUserNotificationCenterDelegate, NSWindowDelegate {
 
     var statusItem: NSStatusItem!
     var shuttleDevice: ShuttleDevice!
@@ -28,7 +38,12 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
 
 
     var settingsWindow: NSWindow?
-    private var settingsStore: Any?
+    private var settingsStore: SettingsStore?
+
+    // Hover Window Cache (for P3-1 Hover Priority)
+    private var lastHoverCheckTime: CFAbsoluteTime = 0
+    private var cachedHoveredApp: NSRunningApplication?
+    private let hoverCacheTTL: CFAbsoluteTime = 0.15
 
     // Assets
     var iconActive: NSImage?
@@ -51,8 +66,11 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
 
                 let response = alert.runModal()
                 if response == .alertFirstButtonReturn {
-                    let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
-                    NSWorkspace.shared.open(url)
+                    let promptOptions: [String: Any] = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
+                    _ = AXIsProcessTrustedWithOptions(promptOptions as CFDictionary)
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                        NSWorkspace.shared.open(url)
+                    }
                 }
             }
         } else {
@@ -115,15 +133,9 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
 
         // Setup Notifications
         UNUserNotificationCenter.current().delegate = self
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, error in
             if let error = error {
                 print("Notification permission error: \(error)")
-            }
-            print("Notification permission granted: \(granted)")
-            if granted {
-                DispatchQueue.main.async {
-                    self.showNotification(title: "MacShuttle", message: "應用程式已啟動 (Notification Test)")
-                }
             }
         }
 
@@ -339,6 +351,10 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
         loadConfig()
         updateActiveProfile()
         updateMenuState()
+        settingsStore?.config = self.config
+        if let activeId = activeProfile?.id {
+            settingsStore?.selectedProfileId = activeId
+        }
         showNotification(title: "MacShuttle", message: "設定已更新")
     }
 
@@ -353,12 +369,15 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
 
     @objc func openSettings() {
         if let window = settingsWindow {
+            if let activeId = activeProfile?.id {
+                settingsStore?.selectedProfileId = activeId
+            }
             window.makeKeyAndOrderFront(nil)
             NSApplication.shared.activate(ignoringOtherApps: true)
             return
         }
 
-        let store = SettingsStore(config: self.config, onSave: { [weak self] newConfig in
+        let store = SettingsStore(config: self.config, selectedProfileId: activeProfile?.id, onSave: { [weak self] newConfig in
             self?.config = newConfig
             self?.saveConfig()
             self?.updateActiveProfile()
@@ -376,17 +395,18 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.center()
         window.isReleasedWhenClosed = false
+        window.delegate = self
 
         settingsWindow = window
         window.makeKeyAndOrderFront(nil)
         NSApplication.shared.activate(ignoringOtherApps: true)
+    }
 
-        // Handle window close to clean up
-        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: nil) { [weak self] _ in
-            self?.flushPendingSave()
-            self?.settingsWindow = nil
-            self?.settingsStore = nil
-        }
+    func windowWillClose(_ notification: Notification) {
+        guard (notification.object as? NSWindow) === settingsWindow else { return }
+        flushPendingSave()
+        settingsWindow = nil
+        settingsStore = nil
     }
 
 
@@ -414,63 +434,126 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
     }
 
     func updateActiveProfile() {
-        var matched: ShuttleProfile? = nil
+        activeProfile = AppController.matchProfile(appName: currentAppName, bundleId: currentBundleId, in: config.profiles, hoverOnly: false)
+        scrollEngine.speeds = activeProfile?.speeds ?? defaultSpeeds
+    }
 
-        // Exact match by localizedName or bundleIdentifier
-        for p in config.profiles {
+    static func matchProfile(appName: String, bundleId: String, in profiles: [ShuttleProfile], hoverOnly: Bool) -> ShuttleProfile? {
+        for p in profiles {
+            if hoverOnly && !p.hoverPriority { continue }
             if p.apps.contains("*") { continue }
-            // Strict match against localizedName or bundleIdentifier
             if p.apps.contains(where: { target in
-                target.localizedCaseInsensitiveCompare(currentAppName) == .orderedSame ||
-                (!currentBundleId.isEmpty && target.localizedCaseInsensitiveCompare(currentBundleId) == .orderedSame)
+                target.localizedCaseInsensitiveCompare(appName) == .orderedSame ||
+                (!bundleId.isEmpty && target.localizedCaseInsensitiveCompare(bundleId) == .orderedSame)
             }) {
-                matched = p
-                break
+                return p
             }
         }
 
-        // Fallback default
-        if matched == nil {
-            for p in config.profiles {
-                if p.apps.contains("*") {
-                    matched = p
-                    break
-                }
+        if hoverOnly { return nil }
+
+        for p in profiles {
+            if p.apps.contains("*") {
+                return p
+            }
+        }
+        return nil
+    }
+
+    private func resolveEffectiveContext() -> (profile: ShuttleProfile?, appToActivate: NSRunningApplication?) {
+        if config.profiles.contains(where: { $0.hoverPriority }),
+           let hoveredApp = hoveredApplication(),
+           let hoveredProfile = AppController.matchProfile(
+               appName: hoveredApp.localizedName ?? "",
+               bundleId: hoveredApp.bundleIdentifier ?? "",
+               in: config.profiles,
+               hoverOnly: true
+           ) {
+            return (hoveredProfile, hoveredApp)
+        }
+        return (activeProfile, nil)
+    }
+
+    private func hoveredApplication() -> NSRunningApplication? {
+        let now = CFAbsoluteTimeGetCurrent()
+        if now - lastHoverCheckTime < hoverCacheTTL {
+            return cachedHoveredApp
+        }
+        lastHoverCheckTime = now
+
+        guard let primaryHeight = NSScreen.screens.first?.frame.height else {
+            cachedHoveredApp = nil
+            return nil
+        }
+
+        let mouseLoc = NSEvent.mouseLocation
+        let quartzPoint = CGPoint(x: mouseLoc.x, y: primaryHeight - mouseLoc.y)
+
+        guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+            cachedHoveredApp = nil
+            return nil
+        }
+
+        let selfPid = ProcessInfo.processInfo.processIdentifier
+        for info in windowList {
+            guard let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
+                  let boundsDict = info[kCGWindowBounds as String] as? [String: Any],
+                  let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary),
+                  bounds.contains(quartzPoint),
+                  let ownerPid = info[kCGWindowOwnerPID as String] as? pid_t,
+                  ownerPid != selfPid else {
+                continue
+            }
+
+            if let app = NSRunningApplication(processIdentifier: ownerPid) {
+                cachedHoveredApp = app
+                return app
             }
         }
 
-        activeProfile = matched
-        scrollEngine.speeds = matched?.speeds ?? defaultSpeeds
+        cachedHoveredApp = nil
+        return nil
     }
 
     // MARK: - Device Delegate
 
     func shuttleDeviceDidConnect(_ device: ShuttleDevice) {
         DispatchQueue.main.async {
-            self.connectionStatusItem.title = "已連接: ShuttleXpress/Pro"
+            self.lastButtonMask = 0
+            self.lastJogVal = nil
+            self.connectionStatusItem.title = "已連接: \(device.productName)"
             self.updateIcon(connected: true)
         }
     }
 
     func shuttleDeviceDidDisconnect(_ device: ShuttleDevice) {
         DispatchQueue.main.async {
+            self.scrollEngine.stop()
+            self.lastButtonMask = 0
+            self.lastJogVal = nil
             self.connectionStatusItem.title = "狀態: 未連接"
             self.updateIcon(connected: false)
         }
     }
 
     func shuttleDevice(_ device: ShuttleDevice, didUpdateButtons mask: UInt32) {
-        guard isEnabled, let profile = activeProfile else { return }
-
         let pressed = mask & ~lastButtonMask
         lastButtonMask = mask
 
-        if pressed == 0 { return }
+        guard isEnabled, pressed != 0 else { return }
+
+        let context = resolveEffectiveContext()
+        guard let profile = context.profile else { return }
+
+        if let targetApp = context.appToActivate,
+           targetApp.processIdentifier != NSWorkspace.shared.frontmostApplication?.processIdentifier {
+            targetApp.activate(options: .activateIgnoringOtherApps)
+        }
 
         for i in 0..<16 {
             if (pressed >> i) & 1 == 1 {
                 let btnId = String(i + 1)
-                if let action = profile.buttons[btnId] {
+                if let action = profile.buttons[btnId], !action.isEmpty {
                     InputController.shared.performKey(keyDef: action)
                 }
             }
@@ -478,22 +561,20 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
     }
 
     func shuttleDevice(_ device: ShuttleDevice, didUpdateJog value: Int) {
-        guard isEnabled else { return }
+        defer { lastJogVal = value }
+        guard isEnabled, let last = lastJogVal else { return }
 
-        if let last = lastJogVal {
-            var diff = value - last
-            if diff > 127 { diff -= 256 }
-            else if diff < -127 { diff += 256 }
+        var diff = value - last
+        if diff > 127 { diff -= 256 }
+        else if diff < -127 { diff += 256 }
 
-            if diff != 0 {
-                let direction = diff > 0 ? 1 : -1
-                let steps = abs(diff)
-                for _ in 0..<steps {
-                    InputController.shared.performScroll(direction: direction, multiplier: 3)
-                }
+        if diff != 0 {
+            let direction = diff > 0 ? 1 : -1
+            let steps = min(abs(diff), 5)
+            for _ in 0..<steps {
+                InputController.shared.performScroll(direction: direction, multiplier: 3)
             }
         }
-        lastJogVal = value
     }
 
     func shuttleDevice(_ device: ShuttleDevice, didUpdateShuttle value: Int) {
@@ -501,6 +582,7 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
             scrollEngine.stop()
             return
         }
-        scrollEngine.updateShuttle(value: value)
+        let context = resolveEffectiveContext()
+        scrollEngine.updateShuttle(value: value, speeds: context.profile?.speeds)
     }
 }

@@ -3,10 +3,12 @@ import Combine
 
 class SettingsStore: ObservableObject {
     @Published var config: ShuttleConfig
+    @Published var selectedProfileId: UUID?
     var onSave: (ShuttleConfig) -> Void
 
-    init(config: ShuttleConfig, onSave: @escaping (ShuttleConfig) -> Void) {
+    init(config: ShuttleConfig, selectedProfileId: UUID? = nil, onSave: @escaping (ShuttleConfig) -> Void) {
         self.config = config
+        self.selectedProfileId = selectedProfileId ?? config.profiles.first?.id
         self.onSave = onSave
     }
 
@@ -17,13 +19,12 @@ class SettingsStore: ObservableObject {
 
 struct SettingsView: View {
     @ObservedObject var store: SettingsStore
-    @State private var selectedProfileId: UUID?
     @State private var showDeleteAlert = false
 
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
-                List(selection: $selectedProfileId) {
+                List(selection: $store.selectedProfileId) {
                     ForEach(store.config.profiles) { profile in
                         Text(profile.name)
                             .tag(profile.id)
@@ -64,7 +65,7 @@ struct SettingsView: View {
                             .frame(width: 14, height: 14)
                     }
                     .buttonStyle(PlainButtonStyle())
-                    .disabled(selectedProfileId == nil)
+                    .disabled(store.selectedProfileId == nil)
                     .help("Remove Profile")
                 }
                 .padding(.vertical, 8)
@@ -72,7 +73,7 @@ struct SettingsView: View {
             }
             .frame(minWidth: 200)
 
-            if let selectedIndex = store.config.profiles.firstIndex(where: { $0.id == selectedProfileId }) {
+            if let selectedIndex = store.config.profiles.firstIndex(where: { $0.id == store.selectedProfileId }) {
                 ProfileDetailView(profile: $store.config.profiles[selectedIndex], onSave: {
                     store.save()
                 })
@@ -86,16 +87,16 @@ struct SettingsView: View {
             if store.config.profiles.isEmpty {
                 let defaultProfile = ShuttleProfile(
                     name: "Default (Global)",
-                    apps: [],
-                    speeds: [800, 600, 333, 200, 100, 50, 20],
+                    apps: ["*"],
+                    speeds: defaultSpeeds,
                     buttons: [:]
                 )
                 store.config.profiles.append(defaultProfile)
                 store.save()
             }
 
-            if selectedProfileId == nil, let first = store.config.profiles.first {
-                selectedProfileId = first.id
+            if store.selectedProfileId == nil, let first = store.config.profiles.first {
+                store.selectedProfileId = first.id
             }
         }
         .alert(isPresented: $showDeleteAlert) {
@@ -114,20 +115,20 @@ struct SettingsView: View {
         let newProfile = ShuttleProfile(
             name: "New Profile \(store.config.profiles.count + 1)",
             apps: [],
-            speeds: [800, 600, 333, 200, 100, 50, 20],
+            speeds: defaultSpeeds,
             buttons: [:]
         )
         store.config.profiles.insert(newProfile, at: 0)
-        selectedProfileId = newProfile.id
+        store.selectedProfileId = newProfile.id
         store.save()
     }
 
     func deleteSelectedProfile() {
-        guard let id = selectedProfileId,
+        guard let id = store.selectedProfileId,
               let index = store.config.profiles.firstIndex(where: { $0.id == id }) else { return }
 
         store.config.profiles.remove(at: index)
-        selectedProfileId = nil
+        store.selectedProfileId = store.config.profiles.first?.id
         store.save()
     }
 }
@@ -136,22 +137,34 @@ struct ProfileDetailView: View {
     @Binding var profile: ShuttleProfile
     var onSave: () -> Void
     @State private var newApp: String = ""
+    @State private var editingName: String = ""
+    @FocusState private var isNameFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
                 Text("Profile Name:")
                     .foregroundColor(.secondary)
-                TextField("Name", text: Binding(
-                    get: { profile.name },
-                    set: { newValue in
-                        if !newValue.isEmpty {
+                TextField("Name", text: $editingName)
+                    .focused($isNameFocused)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .onAppear { editingName = profile.name }
+                    .onChange(of: profile.id) { _ in editingName = profile.name }
+                    .onChange(of: editingName) { newValue in
+                        let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty && profile.name != newValue {
                             profile.name = newValue
                             onSave()
                         }
                     }
-                ))
-                .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .onChange(of: isNameFocused) { focused in
+                        if !focused {
+                            commitProfileName()
+                        }
+                    }
+                    .onSubmit {
+                        commitProfileName()
+                    }
             }
             .padding()
 
@@ -170,12 +183,38 @@ struct ProfileDetailView: View {
             .padding()
         }
     }
+
+    private func commitProfileName() {
+        let trimmed = editingName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            editingName = profile.name.isEmpty ? "Untitled Profile" : profile.name
+        } else if profile.name != trimmed {
+            profile.name = trimmed
+            editingName = trimmed
+            onSave()
+        }
+    }
 }
 
 struct TargetAppsView: View {
     @Binding var profile: ShuttleProfile
     var onSave: () -> Void
     @Binding var newApp: String
+
+    private var runningApps: [(name: String, identifier: String)] {
+        let selfBundleId = Bundle.main.bundleIdentifier ?? ""
+        return NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular }
+            .compactMap { app -> (name: String, identifier: String)? in
+                let name = app.localizedName ?? ""
+                let bundleId = app.bundleIdentifier ?? ""
+                if !selfBundleId.isEmpty && bundleId == selfBundleId { return nil }
+                let identifier = bundleId.isEmpty ? name : bundleId
+                guard !identifier.isEmpty else { return nil }
+                return (name: name.isEmpty ? identifier : name, identifier: identifier)
+            }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -184,12 +223,12 @@ struct TargetAppsView: View {
                 .foregroundColor(.secondary)
 
             List {
-                ForEach(Array(profile.apps.enumerated()), id: \.offset) { index, app in
+                ForEach(profile.apps, id: \.self) { app in
                     HStack {
                         Text(app)
                         Spacer()
                         Button(action: {
-                            removeApp(at: index)
+                            removeApp(app)
                         }) {
                             Image(nsImage: NSImage(named: NSImage.stopProgressTemplateName)!)
                                 .foregroundColor(.secondary)
@@ -203,31 +242,82 @@ struct TargetAppsView: View {
 
             HStack {
                 TextField("Add App or Bundle ID (e.g. Chrome, com.google.Chrome)", text: $newApp, onCommit: {
-                    addApp()
+                    addApp(newApp)
                 })
                 .textFieldStyle(RoundedBorderTextFieldStyle())
 
                 Button("Add") {
-                    addApp()
+                    addApp(newApp)
+                }
+
+                Menu("從執行中程式加入") {
+                    ForEach(runningApps, id: \.identifier) { item in
+                        Button("\(item.name) (\(item.identifier))") {
+                            addApp(item.identifier)
+                        }
+                    }
+                }
+
+                Button("瀏覽...") {
+                    browseApplication()
                 }
             }
+
+            Divider()
+                .padding(.vertical, 4)
+
+            Toggle(isOn: Binding(
+                get: { profile.hoverPriority },
+                set: {
+                    profile.hoverPriority = $0
+                    onSave()
+                }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("滑鼠懸停優先 (Hover Priority)")
+                        .font(.system(size: 13, weight: .medium))
+                    Text("雙螢幕游標停在此 App 視窗上時自動套用此設定檔，並在按鍵前自動聚焦目標視窗")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .disabled(profile.apps.contains("*"))
         }
         .padding()
     }
 
-    func addApp() {
-        let trimmed = newApp.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty {
+    func addApp(_ raw: String) {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if !profile.apps.contains(where: { $0.localizedCaseInsensitiveCompare(trimmed) == .orderedSame }) {
             profile.apps.append(trimmed)
+            onSave()
+        }
+        if raw == newApp {
             newApp = ""
+        }
+    }
+
+    func removeApp(_ app: String) {
+        if let index = profile.apps.firstIndex(of: app) {
+            profile.apps.remove(at: index)
             onSave()
         }
     }
 
-    func removeApp(at index: Int) {
-        if index < profile.apps.count {
-            profile.apps.remove(at: index)
-            onSave()
+    func browseApplication() {
+        let panel = NSOpenPanel()
+        panel.title = "選擇應用程式"
+        panel.allowedContentTypes = [.applicationBundle]
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        if panel.runModal() == .OK, let url = panel.url {
+            if let bundle = Bundle(url: url), let bundleId = bundle.bundleIdentifier {
+                addApp(bundleId)
+            } else {
+                addApp(url.deletingPathExtension().lastPathComponent)
+            }
         }
     }
 }
@@ -451,6 +541,9 @@ struct ButtonsView: View {
             }
             .padding()
         }
+        .onChange(of: profile.id) { _ in
+            activeRecordingButtonId = nil
+        }
     }
 }
 
@@ -478,10 +571,12 @@ struct ShuttleSpeedsView: View {
                     SpeedRow(
                         level: i + 1,
                         value: Binding(
-                            get: { profile.speeds[i] },
+                            get: { i < profile.speeds.count ? profile.speeds[i] : defaultSpeeds[i] },
                             set: {
-                                profile.speeds[i] = $0
-                                onSave()
+                                if i < profile.speeds.count {
+                                    profile.speeds[i] = $0
+                                    onSave()
+                                }
                             }
                         )
                     )

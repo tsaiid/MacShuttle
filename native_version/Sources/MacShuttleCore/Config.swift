@@ -8,27 +8,31 @@ struct ShuttleProfile: Codable, Hashable, Identifiable {
     var apps: [String]
     var speeds: [Int] // 7 levels, in ms
     var buttons: [String: String] // "1": "cmd+c"
+    var hoverPriority: Bool = false
 
     enum CodingKeys: String, CodingKey {
-        case id, name, apps, speeds, buttons
+        case id, name, apps, speeds, buttons, hoverPriority
     }
 
-    init(name: String, apps: [String], speeds: [Int], buttons: [String: String]) {
+    init(name: String, apps: [String], speeds: [Int], buttons: [String: String], hoverPriority: Bool = false) {
         self.id = UUID()
         self.name = name
         self.apps = apps
-        self.speeds = speeds
+        self.speeds = ShuttleProfile.normalizeSpeeds(speeds)
         self.buttons = buttons
+        self.hoverPriority = hoverPriority
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         name = try container.decode(String.self, forKey: .name)
         apps = try container.decode([String].self, forKey: .apps)
-        speeds = try container.decode([Int].self, forKey: .speeds)
+        let rawSpeeds = (try? container.decode([Int].self, forKey: .speeds)) ?? defaultSpeeds
+        speeds = ShuttleProfile.normalizeSpeeds(rawSpeeds)
         buttons = try container.decode([String: String].self, forKey: .buttons)
         // Use existing ID if present, otherwise generate new one
         id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        hoverPriority = try container.decodeIfPresent(Bool.self, forKey: .hoverPriority) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -38,6 +42,13 @@ struct ShuttleProfile: Codable, Hashable, Identifiable {
         try container.encode(apps, forKey: .apps)
         try container.encode(speeds, forKey: .speeds)
         try container.encode(buttons, forKey: .buttons)
+        try container.encode(hoverPriority, forKey: .hoverPriority)
+    }
+
+    static func normalizeSpeeds(_ raw: [Int]) -> [Int] {
+        return (0..<7).map { idx in
+            idx < raw.count ? max(1, raw[idx]) : defaultSpeeds[idx]
+        }
     }
 }
 
@@ -113,6 +124,8 @@ let macKeyCodes: [String: CGKeyCode] = [
     // Function Keys
     "f1": 122, "f2": 120, "f3": 99, "f4": 118, "f5": 96, "f6": 97,
     "f7": 98, "f8": 100, "f9": 101, "f10": 109, "f11": 103, "f12": 111,
+    "f13": 105, "f14": 107, "f15": 113, "f16": 106,
+    "f17": 64, "f18": 79, "f19": 80, "f20": 90,
 
     // Keypad (Numpad) Keys & Aliases
     "keypad0": 82, "keypad1": 83, "keypad2": 84, "keypad3": 85, "keypad4": 86,
@@ -121,6 +134,8 @@ let macKeyCodes: [String: CGKeyCode] = [
     "numpad5": 87, "numpad6": 88, "numpad7": 89, "numpad8": 91, "numpad9": 92,
     "keypaddecimal": 65, "keypadmultiply": 67, "keypaddivide": 75,
     "keypadplus": 69, "keypadminus": 78, "keypadenter": 76, "keypadequals": 81,
+    "numpaddecimal": 65, "numpadmultiply": 67, "numpaddivide": 75,
+    "numpadplus": 69, "numpadminus": 78, "numpadenter": 76, "numpadequals": 81,
 
     // Modifiers
     "command": 55, "cmd": 55, "shift": 56, "capslock": 57, "option": 58, "opt": 58,
@@ -155,12 +170,14 @@ struct ShortcutFormatter {
         // Function keys
         122: "f1", 120: "f2", 99: "f3", 118: "f4", 96: "f5", 97: "f6",
         98: "f7", 100: "f8", 101: "f9", 109: "f10", 103: "f11", 111: "f12",
+        105: "f13", 107: "f14", 113: "f15", 106: "f16",
+        64: "f17", 79: "f18", 80: "f19", 90: "f20",
 
         // Keypad
         82: "keypad0", 83: "keypad1", 84: "keypad2", 85: "keypad3", 86: "keypad4",
         87: "keypad5", 88: "keypad6", 89: "keypad7", 91: "keypad8", 92: "keypad9",
         65: "keypaddecimal", 67: "keypadmultiply", 69: "keypadplus", 75: "keypaddivide",
-        76: "enter", 78: "keypadminus", 81: "keypadequals"
+        76: "keypadenter", 78: "keypadminus", 81: "keypadequals"
     ]
 
     static func canonicalName(for keyCode: CGKeyCode) -> String {
@@ -192,45 +209,45 @@ struct ShortcutFormatter {
     static func parseKeyDefinition(_ keyDef: String) -> (baseKey: String, modifiers: [String]) {
         let trimmedKeyDef = keyDef.trimmingCharacters(in: .whitespacesAndNewlines)
         let lower = trimmedKeyDef.lowercased()
-        var modifiers: [String] = []
+        var modifierSet = Set<String>()
         var baseKey = lower
+
+        func parseModifiers(from parts: [String]) {
+            for raw in parts {
+                let p = raw.trimmingCharacters(in: .whitespaces)
+                if p.contains("cmd") || p.contains("command") { modifierSet.insert("command") }
+                if p.contains("shift") { modifierSet.insert("shift") }
+                if p.contains("ctrl") || p.contains("control") { modifierSet.insert("control") }
+                if p.contains("opt") || p.contains("alt") { modifierSet.insert("option") }
+            }
+        }
 
         if lower == "+" {
             baseKey = "plus"
-        } else if lower.hasSuffix("++") {
-            let prefix = String(lower.dropLast(2))
+        } else if lower.hasSuffix("+") {
+            // Handles "cmd++", "cmd + +", "shift+cmd++"
+            let prefix = String(lower.dropLast())
             baseKey = "plus"
-            for part in prefix.split(separator: "+") {
-                let p = part.trimmingCharacters(in: .whitespaces)
-                if p.contains("cmd") || p.contains("command") { modifiers.append("command") }
-                if p.contains("shift") { modifiers.append("shift") }
-                if p.contains("ctrl") || p.contains("control") { modifiers.append("control") }
-                if p.contains("opt") || p.contains("alt") { modifiers.append("option") }
-            }
+            let parts = prefix.split(separator: "+", omittingEmptySubsequences: true).map { String($0) }
+            parseModifiers(from: parts)
         } else if lower.contains("+") {
-            let parts = lower.split(separator: "+").map { String($0) }
+            let parts = lower.split(separator: "+", omittingEmptySubsequences: false).map { String($0) }
             baseKey = parts.last ?? ""
-
             if parts.count > 1 {
-                for part in parts.dropLast() {
-                    let p = part.trimmingCharacters(in: .whitespaces)
-                    if p.contains("cmd") || p.contains("command") { modifiers.append("command") }
-                    if p.contains("shift") { modifiers.append("shift") }
-                    if p.contains("ctrl") || p.contains("control") { modifiers.append("control") }
-                    if p.contains("opt") || p.contains("alt") { modifiers.append("option") }
-                }
+                parseModifiers(from: Array(parts.dropLast()))
             }
         }
 
         // Implicit Shift for single uppercase characters (e.g. "Z")
-        if modifiers.isEmpty && trimmedKeyDef.count == 1 &&
+        if modifierSet.isEmpty && trimmedKeyDef.count == 1 &&
             trimmedKeyDef.uppercased() == trimmedKeyDef &&
             trimmedKeyDef.lowercased() != trimmedKeyDef {
-            modifiers.append("shift")
+            modifierSet.insert("shift")
             baseKey = trimmedKeyDef.lowercased()
         }
 
-        return (baseKey.lowercased().trimmingCharacters(in: .whitespaces), modifiers)
+        let orderedModifiers = ["control", "option", "shift", "command"].filter { modifierSet.contains($0) }
+        return (baseKey.lowercased().trimmingCharacters(in: .whitespaces), orderedModifiers)
     }
 
     static func displayString(for keyDef: String) -> String {
@@ -273,6 +290,7 @@ struct ShortcutFormatter {
         case "keypaddivide": return "Num /"
         case "keypaddecimal": return "Num ."
         case "keypadequals": return "Num ="
+        case "keypadenter", "numpadenter": return "Num Enter"
         case let k where k.hasPrefix("keypad") || k.hasPrefix("numpad"):
             let num = k.replacingOccurrences(of: "keypad", with: "").replacingOccurrences(of: "numpad", with: "")
             return "Num \(num)"

@@ -47,8 +47,8 @@
 ### 設定檔
 
 *   第一次執行後，設定檔會自動建立於：
-    `~/Library/Application Support/MacShuttle/settings.json`
-*   您可以透過 Menu Bar 圖示 -> **「在 Finder 中顯示設定檔...」** 快速開啟編輯。
+    `~/Library/Application Support/MacShuttle/shuttle_config.json`
+*   您可以透過 Menu Bar 圖示 -> **「編輯設定檔 (shuttle_config.json)」** 快速開啟編輯，或使用 **「偏好設定... (Preferences)」** 進行圖形化設定。
 
 ---
 

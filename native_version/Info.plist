@@ -19,7 +19,9 @@
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
-    <string>10.13</string>
+    <string>12.0</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>MacShuttle 需要控制「System Events」以模擬複合快捷鍵與支援遠端桌面 (RDP) 按鍵穿透。</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSPrincipalClass</key>
