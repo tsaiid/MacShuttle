@@ -1,5 +1,6 @@
 import XCTest
 import AppKit
+import SwiftUI
 @testable import MacShuttleCore
 
 final class ShortcutFormatterTests: XCTestCase {
@@ -168,5 +169,156 @@ final class ConfigDecodingTests: XCTestCase {
             AppController.matchProfile(appName: "Unknown App", bundleId: "com.example.unknown", in: profiles, hoverOnly: false)?.name,
             "Global"
         )
+    }
+}
+
+final class SettingsStoreTests: XCTestCase {
+
+    func testUuidScopedBindingDoesNotOverwriteAnotherProfileAfterSelectionSwitch() {
+        let profileA = ShuttleProfile(name: "A", apps: ["AppA"], speeds: defaultSpeeds, buttons: [:])
+        let profileB = ShuttleProfile(name: "B", apps: ["AppB"], speeds: defaultSpeeds, buttons: [:])
+        let store = SettingsStore(config: ShuttleConfig(profiles: [profileA, profileB]), selectedProfileId: profileA.id) { _ in }
+
+        let bindingA = store.binding(for: profileA.id, fallback: profileA)
+
+        // Simulate switching selection to B while a stale closure still holds A's binding
+        store.selectedProfileId = profileB.id
+        bindingA.wrappedValue.name = "A"
+
+        XCTAssertEqual(store.profile(for: profileA.id)?.name, "A")
+        XCTAssertEqual(store.profile(for: profileB.id)?.name, "B")
+    }
+
+    func testDeleteLastProfileInListDoesNotCrashAndKeepsStaleBindingSafe() {
+        let profileA = ShuttleProfile(name: "A", apps: ["AppA"], speeds: defaultSpeeds, buttons: [:])
+        let profileB = ShuttleProfile(name: "B", apps: ["AppB"], speeds: defaultSpeeds, buttons: [:])
+        var savedConfigs: [ShuttleConfig] = []
+        let store = SettingsStore(config: ShuttleConfig(profiles: [profileA, profileB]), selectedProfileId: profileB.id) { cfg in
+            savedConfigs.append(cfg)
+        }
+
+        // Capture binding to the last profile before deletion
+        let bindingB = store.binding(for: profileB.id, fallback: profileB)
+
+        store.deleteSelectedProfile()
+
+        XCTAssertEqual(store.config.profiles.count, 1)
+        XCTAssertEqual(store.config.profiles[0].id, profileA.id)
+        XCTAssertEqual(store.selectedProfileId, profileA.id)
+        XCTAssertEqual(savedConfigs.count, 1)
+
+        // Accessing or writing through the stale binding for the deleted last profile must not crash or mutate A
+        XCTAssertEqual(bindingB.wrappedValue.name, "B")
+        bindingB.wrappedValue.name = "StaleWrite"
+        XCTAssertEqual(store.profile(for: profileA.id)?.name, "A")
+    }
+
+    func testDeleteOnlyRemainingProfileClearsSelectionWithoutCrashing() {
+        let onlyProfile = ShuttleProfile(name: "Only", apps: ["*"], speeds: defaultSpeeds, buttons: [:])
+        var saveCount = 0
+        let store = SettingsStore(config: ShuttleConfig(profiles: [onlyProfile]), selectedProfileId: onlyProfile.id) { _ in
+            saveCount += 1
+        }
+
+        let staleBinding = store.binding(for: onlyProfile.id, fallback: onlyProfile)
+
+        store.deleteSelectedProfile()
+
+        XCTAssertTrue(store.config.profiles.isEmpty)
+        XCTAssertNil(store.selectedProfileId)
+        XCTAssertEqual(saveCount, 1)
+
+        // Reading or writing stale binding after array becomes empty must not crash
+        XCTAssertEqual(staleBinding.wrappedValue.name, "Only")
+        staleBinding.wrappedValue.name = "Ignored"
+        XCTAssertTrue(store.config.profiles.isEmpty)
+    }
+
+    func testSettingsViewSwitchingAndDeletingLastProfileInHostingView() {
+        _ = NSApplication.shared
+        let profileA = ShuttleProfile(name: "A", apps: ["AppA"], speeds: defaultSpeeds, buttons: [:])
+        let profileB = ShuttleProfile(name: "B", apps: ["AppB"], speeds: defaultSpeeds, buttons: [:])
+        let store = SettingsStore(config: ShuttleConfig(profiles: [profileA, profileB]), selectedProfileId: profileA.id) { _ in }
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        let hostingView = NSHostingView(rootView: SettingsView(store: store))
+        hostingView.frame = NSRect(x: 0, y: 0, width: 800, height: 600)
+        window.contentView = hostingView
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        func findEditableTextField(in view: NSView, matching value: String) -> NSTextField? {
+            if let tf = view as? NSTextField, tf.isEditable, tf.stringValue == value {
+                return tf
+            }
+            for subview in view.subviews {
+                if let found = findEditableTextField(in: subview, matching: value) {
+                    return found
+                }
+            }
+            return nil
+        }
+
+        // Focus Profile A's Name TextField, then switch selection to B
+        let nameFieldA = findEditableTextField(in: hostingView, matching: "A")
+        XCTAssertNotNil(nameFieldA, "Expected editable TextField for Profile A")
+        if let nameFieldA {
+            window.makeFirstResponder(nameFieldA)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+
+        store.selectedProfileId = profileB.id
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        hostingView.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(store.profile(for: profileA.id)?.name, "A")
+        XCTAssertEqual(store.profile(for: profileB.id)?.name, "B")
+
+        // Focus Profile B's Name TextField, then switch back to A and verify neither is overwritten
+        let nameFieldB = findEditableTextField(in: hostingView, matching: "B")
+        XCTAssertNotNil(nameFieldB, "Expected editable TextField for Profile B")
+        if let nameFieldB {
+            window.makeFirstResponder(nameFieldB)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+
+        store.selectedProfileId = profileA.id
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        hostingView.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(store.profile(for: profileA.id)?.name, "A")
+        XCTAssertEqual(store.profile(for: profileB.id)?.name, "B")
+
+        // Select last profile (B), focus its field, and delete it
+        store.selectedProfileId = profileB.id
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        hostingView.layoutSubtreeIfNeeded()
+        if let nameFieldBForDelete = findEditableTextField(in: hostingView, matching: "B") {
+            window.makeFirstResponder(nameFieldBForDelete)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+
+        store.deleteSelectedProfile()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        hostingView.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(store.config.profiles.count, 1)
+        XCTAssertEqual(store.selectedProfileId, profileA.id)
+        XCTAssertEqual(store.profile(for: profileA.id)?.name, "A")
+
+        // Delete the only remaining profile (A)
+        store.deleteSelectedProfile()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        hostingView.layoutSubtreeIfNeeded()
+
+        XCTAssertTrue(store.config.profiles.isEmpty)
+        XCTAssertNil(store.selectedProfileId)
+        window.close()
     }
 }

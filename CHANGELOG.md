@@ -5,6 +5,13 @@ All notable changes to **MacShuttle** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-11-22
+
+### Fixed
+- **偏好設定切換 Profile 名稱誤覆寫**：改用 UUID 綁定與 View Identity 隔離（`.id(selectedId)`）並保留分頁狀態，修正滑鼠切換 Profile 時舊有輸入框焦點失焦導致下一個 Profile 名稱被前一個覆寫的問題。
+- **刪除最後一個 Profile 閃退**：移除索引型陣列 Binding，改以安全 UUID 查找與先更新選取狀態再移除元素，修正刪除清單最後一筆或唯一一筆 Profile 時觸發 `Index out of range` 閃退的問題。
+- **單元測試補強**：新增 `SettingsStoreTests` 驗證跨 Profile 切換隔離與刪除最後/唯一 Profile 的穩定性（共 12 項 `XCTest` 測試）。
+
 ## [1.0.0] - 2026-11-15
 
 ### Added

@@ -1,6 +1,12 @@
 import SwiftUI
 import Combine
 
+enum ProfileTab: Hashable {
+    case targetApps
+    case buttons
+    case shuttleSpeeds
+}
+
 class SettingsStore: ObservableObject {
     @Published var config: ShuttleConfig
     @Published var selectedProfileId: UUID?
@@ -15,11 +21,58 @@ class SettingsStore: ObservableObject {
     func save() {
         onSave(config)
     }
+
+    func profile(for id: UUID) -> ShuttleProfile? {
+        config.profiles.first(where: { $0.id == id })
+    }
+
+    func binding(for profileId: UUID, fallback: ShuttleProfile) -> Binding<ShuttleProfile> {
+        Binding(
+            get: { [weak self] in
+                self?.config.profiles.first(where: { $0.id == profileId }) ?? fallback
+            },
+            set: { [weak self] newValue in
+                guard let self = self,
+                      let index = self.config.profiles.firstIndex(where: { $0.id == profileId }) else {
+                    return
+                }
+                self.config.profiles[index] = newValue
+            }
+        )
+    }
+
+    func addProfile() {
+        let newProfile = ShuttleProfile(
+            name: "New Profile \(config.profiles.count + 1)",
+            apps: [],
+            speeds: defaultSpeeds,
+            buttons: [:]
+        )
+        config.profiles.insert(newProfile, at: 0)
+        selectedProfileId = newProfile.id
+        save()
+    }
+
+    func deleteSelectedProfile() {
+        guard let id = selectedProfileId,
+              let index = config.profiles.firstIndex(where: { $0.id == id }) else { return }
+
+        var updatedProfiles = config.profiles
+        updatedProfiles.remove(at: index)
+        let nextSelection: UUID? = updatedProfiles.isEmpty
+            ? nil
+            : updatedProfiles[min(index, updatedProfiles.count - 1)].id
+
+        selectedProfileId = nextSelection
+        config.profiles = updatedProfiles
+        save()
+    }
 }
 
 struct SettingsView: View {
     @ObservedObject var store: SettingsStore
     @State private var showDeleteAlert = false
+    @State private var selectedTab: ProfileTab = .targetApps
 
     var body: some View {
         NavigationView {
@@ -54,7 +107,7 @@ struct SettingsView: View {
 
                     Spacer()
 
-                    Button(action: addProfile) {
+                    Button(action: { store.addProfile() }) {
                         Image(nsImage: NSImage(named: NSImage.addTemplateName)!)
                             .resizable()
                             .aspectRatio(contentMode: .fit)
@@ -78,10 +131,16 @@ struct SettingsView: View {
             }
             .frame(minWidth: 200)
 
-            if let selectedIndex = store.config.profiles.firstIndex(where: { $0.id == store.selectedProfileId }) {
-                ProfileDetailView(profile: $store.config.profiles[selectedIndex], onSave: {
-                    store.save()
-                })
+            if let selectedId = store.selectedProfileId,
+               let selectedProfile = store.profile(for: selectedId) {
+                ProfileDetailView(
+                    profile: store.binding(for: selectedId, fallback: selectedProfile),
+                    selectedTab: $selectedTab,
+                    onSave: {
+                        store.save()
+                    }
+                )
+                .id(selectedId)
             } else {
                 Text("Select a profile to edit")
                     .foregroundColor(.secondary)
@@ -109,41 +168,31 @@ struct SettingsView: View {
                 title: Text("Remove Profile"),
                 message: Text("Are you sure you want to remove the selected profile?"),
                 primaryButton: .destructive(Text("Remove")) {
-                    deleteSelectedProfile()
+                    store.deleteSelectedProfile()
                 },
                 secondaryButton: .cancel()
             )
         }
     }
-
-    func addProfile() {
-        let newProfile = ShuttleProfile(
-            name: "New Profile \(store.config.profiles.count + 1)",
-            apps: [],
-            speeds: defaultSpeeds,
-            buttons: [:]
-        )
-        store.config.profiles.insert(newProfile, at: 0)
-        store.selectedProfileId = newProfile.id
-        store.save()
-    }
-
-    func deleteSelectedProfile() {
-        guard let id = store.selectedProfileId,
-              let index = store.config.profiles.firstIndex(where: { $0.id == id }) else { return }
-
-        store.config.profiles.remove(at: index)
-        store.selectedProfileId = store.config.profiles.first?.id
-        store.save()
-    }
 }
 
 struct ProfileDetailView: View {
     @Binding var profile: ShuttleProfile
+    @Binding var selectedTab: ProfileTab
     var onSave: () -> Void
     @State private var newApp: String = ""
-    @State private var editingName: String = ""
+    @State private var editingName: String
+    @State private var syncedProfileId: UUID
     @FocusState private var isNameFocused: Bool
+
+    init(profile: Binding<ShuttleProfile>, selectedTab: Binding<ProfileTab>, onSave: @escaping () -> Void) {
+        self._profile = profile
+        self._selectedTab = selectedTab
+        self.onSave = onSave
+        let initial = profile.wrappedValue
+        self._editingName = State(initialValue: initial.name)
+        self._syncedProfileId = State(initialValue: initial.id)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -153,9 +202,17 @@ struct ProfileDetailView: View {
                 TextField("Name", text: $editingName)
                     .focused($isNameFocused)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .onAppear { editingName = profile.name }
-                    .onChange(of: profile.id) { _ in editingName = profile.name }
+                    .onChange(of: profile.id) { newId in
+                        syncedProfileId = newId
+                        editingName = profile.name
+                    }
+                    .onChange(of: profile.name) { newName in
+                        if syncedProfileId == profile.id && !isNameFocused && editingName != newName {
+                            editingName = newName
+                        }
+                    }
                     .onChange(of: editingName) { newValue in
+                        guard syncedProfileId == profile.id else { return }
                         let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
                         if !trimmed.isEmpty && profile.name != newValue {
                             profile.name = newValue
@@ -175,21 +232,25 @@ struct ProfileDetailView: View {
 
             Divider()
 
-            TabView {
+            TabView(selection: $selectedTab) {
                 TargetAppsView(profile: $profile, onSave: onSave, newApp: $newApp)
                     .tabItem { Text("Target Apps") }
+                    .tag(ProfileTab.targetApps)
 
                 ButtonsView(profile: $profile, onSave: onSave)
                     .tabItem { Text("Buttons") }
+                    .tag(ProfileTab.buttons)
 
                 ShuttleSpeedsView(profile: $profile, onSave: onSave)
                     .tabItem { Text("Shuttle Speeds") }
+                    .tag(ProfileTab.shuttleSpeeds)
             }
             .padding()
         }
     }
 
     private func commitProfileName() {
+        guard syncedProfileId == profile.id else { return }
         let trimmed = editingName.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             editingName = profile.name.isEmpty ? "Untitled Profile" : profile.name
@@ -596,8 +657,14 @@ struct ShuttleSpeedsView: View {
 struct SpeedRow: View {
     let level: Int
     @Binding var value: Int
-    @State private var text: String = ""
+    @State private var text: String
     @FocusState private var isFocused: Bool
+
+    init(level: Int, value: Binding<Int>) {
+        self.level = level
+        self._value = value
+        self._text = State(initialValue: String(max(1, value.wrappedValue)))
+    }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -627,7 +694,7 @@ struct SpeedRow: View {
                     }
 
                     // Step 5: Sync with the Int binding
-                    if let intVal = Int(sanitized), intVal >= 1 {
+                    if let intVal = Int(sanitized), intVal >= 1, intVal != value {
                         value = intVal
                     }
                 }
@@ -635,9 +702,12 @@ struct SpeedRow: View {
                     if !focused {
                         // When losing focus, ensure value is valid and text is synced
                         if text.isEmpty || (Int(text) ?? 0) < 1 {
-                            value = max(1, value)
+                            let safeValue = max(1, value)
+                            if value != safeValue {
+                                value = safeValue
+                            }
                         }
-                        text = String(value)
+                        text = String(max(1, value))
                     }
                 }
                 .onChange(of: value) { newValue in
@@ -659,7 +729,10 @@ struct SpeedRow: View {
                     if value < 1 {
                         value = 1
                     }
-                    text = String(value)
+                    let expected = String(value)
+                    if text != expected {
+                        text = expected
+                    }
                 }
                 .textFieldStyle(RoundedBorderTextFieldStyle())
                 .frame(width: 60)
