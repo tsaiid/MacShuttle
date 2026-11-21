@@ -322,3 +322,91 @@ final class SettingsStoreTests: XCTestCase {
         window.close()
     }
 }
+
+final class ProfileConflictDetectorTests: XCTestCase {
+
+    func testBasicOrderOverlapDetectionCaseInsensitive() {
+        let top = ShuttleProfile(name: "Top", apps: ["com.google.Chrome"], speeds: defaultSpeeds, buttons: [:])
+        let bottom = ShuttleProfile(name: "Bottom", apps: ["COM.GOOGLE.CHROME"], speeds: defaultSpeeds, buttons: [:])
+        let profiles = [top, bottom]
+
+        let topOverlaps = ProfileConflictDetector.overlaps(for: "com.google.Chrome", in: top.id, profiles: profiles)
+        XCTAssertEqual(topOverlaps.count, 1)
+        XCTAssertEqual(topOverlaps[0].kind, .shadowsLower)
+        XCTAssertFalse(topOverlaps[0].isWarning)
+        XCTAssertFalse(ProfileConflictDetector.profileHasWarnings(profileId: top.id, profiles: profiles))
+
+        let bottomOverlaps = ProfileConflictDetector.overlaps(for: "COM.GOOGLE.CHROME", in: bottom.id, profiles: profiles)
+        XCTAssertEqual(bottomOverlaps.count, 1)
+        XCTAssertEqual(bottomOverlaps[0].kind, .shadowedByHigher)
+        XCTAssertTrue(bottomOverlaps[0].isWarning)
+        XCTAssertTrue(ProfileConflictDetector.profileHasWarnings(profileId: bottom.id, profiles: profiles))
+    }
+
+    func testHoverPriorityConflictAcrossProfiles() {
+        let topNoHover = ShuttleProfile(
+            name: "TopNormal",
+            apps: ["com.microsoft.rdc.macos"],
+            speeds: defaultSpeeds,
+            buttons: [:],
+            hoverPriority: false
+        )
+        let bottomHover = ShuttleProfile(
+            name: "BottomHover",
+            apps: ["com.microsoft.rdc.macos"],
+            speeds: defaultSpeeds,
+            buttons: [:],
+            hoverPriority: true
+        )
+        let profiles = [topNoHover, bottomHover]
+
+        let topOverlaps = ProfileConflictDetector.overlaps(for: "com.microsoft.rdc.macos", in: topNoHover.id, profiles: profiles)
+        XCTAssertEqual(topOverlaps.first?.kind, .overriddenOnHoverByLower)
+        XCTAssertTrue(ProfileConflictDetector.profileHasWarnings(profileId: topNoHover.id, profiles: profiles))
+
+        let bottomOverlaps = ProfileConflictDetector.overlaps(for: "com.microsoft.rdc.macos", in: bottomHover.id, profiles: profiles)
+        XCTAssertEqual(bottomOverlaps.first?.kind, .shadowedExceptHover)
+        XCTAssertTrue(ProfileConflictDetector.profileHasWarnings(profileId: bottomHover.id, profiles: profiles))
+    }
+
+    func testAliasOverlapBetweenAppNameAndBundleId() {
+        let aliases = [AppAlias(name: "Google Chrome", bundleId: "com.google.Chrome")]
+        let top = ShuttleProfile(name: "ByName", apps: ["Google Chrome"], speeds: defaultSpeeds, buttons: [:])
+        let bottom = ShuttleProfile(name: "ByBundle", apps: ["com.google.Chrome"], speeds: defaultSpeeds, buttons: [:])
+        let profiles = [top, bottom]
+
+        let overlaps = ProfileConflictDetector.overlaps(for: "com.google.Chrome", in: bottom.id, profiles: profiles, aliases: aliases)
+        XCTAssertEqual(overlaps.count, 1)
+        XCTAssertEqual(overlaps[0].kind, .shadowedByHigher)
+        XCTAssertTrue(overlaps[0].isAliasMatch)
+        XCTAssertEqual(overlaps[0].matchedEntry, "Google Chrome")
+    }
+
+    func testWildcardDuplicateAndMixedWildcardWarnings() {
+        let global1 = ShuttleProfile(name: "Global 1", apps: ["*"], speeds: defaultSpeeds, buttons: [:])
+        let global2 = ShuttleProfile(name: "Global 2", apps: ["*"], speeds: defaultSpeeds, buttons: [:])
+        let mixed = ShuttleProfile(name: "Mixed", apps: ["*", "Safari"], speeds: defaultSpeeds, buttons: [:])
+        let profiles = [global1, global2, mixed]
+
+        let global2Overlaps = ProfileConflictDetector.overlaps(for: "*", in: global2.id, profiles: profiles)
+        XCTAssertTrue(global2Overlaps.contains(where: { $0.otherProfileId == global1.id && $0.kind == .shadowedByHigher }))
+        XCTAssertTrue(ProfileConflictDetector.hasMixedWildcard(in: mixed))
+        XCTAssertTrue(ProfileConflictDetector.profileHasWarnings(profileId: mixed.id, profiles: profiles))
+    }
+
+    func testMoveAppRemovesFromConflictingProfilesAndAddsToTarget() {
+        let aliases = [AppAlias(name: "Google Chrome", bundleId: "com.google.Chrome")]
+        let profileA = ShuttleProfile(name: "A", apps: ["Google Chrome", "Safari"], speeds: defaultSpeeds, buttons: [:])
+        let profileB = ShuttleProfile(name: "B", apps: ["Firefox"], speeds: defaultSpeeds, buttons: [:])
+        var saveCount = 0
+        let store = SettingsStore(config: ShuttleConfig(profiles: [profileA, profileB]), selectedProfileId: profileB.id) { _ in
+            saveCount += 1
+        }
+
+        store.moveApp("com.google.Chrome", to: profileB.id, aliases: aliases)
+
+        XCTAssertEqual(store.profile(for: profileA.id)?.apps, ["Safari"])
+        XCTAssertEqual(store.profile(for: profileB.id)?.apps, ["Firefox", "com.google.Chrome"])
+        XCTAssertEqual(saveCount, 1)
+    }
+}

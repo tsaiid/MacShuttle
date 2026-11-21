@@ -67,6 +67,37 @@ class SettingsStore: ObservableObject {
         config.profiles = updatedProfiles
         save()
     }
+
+    func addApp(_ raw: String, to profileId: UUID) {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let index = config.profiles.firstIndex(where: { $0.id == profileId }) else { return }
+
+        if !config.profiles[index].apps.contains(where: { $0.localizedCaseInsensitiveCompare(trimmed) == .orderedSame }) {
+            config.profiles[index].apps.append(trimmed)
+            save()
+        }
+    }
+
+    func moveApp(_ raw: String, to targetProfileId: UUID, aliases: [AppAlias] = []) {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let targetIndex = config.profiles.firstIndex(where: { $0.id == targetProfileId }) else { return }
+
+        var updatedProfiles = config.profiles
+        for i in updatedProfiles.indices where updatedProfiles[i].id != targetProfileId {
+            updatedProfiles[i].apps.removeAll { entry in
+                ProfileConflictDetector.entriesMatch(trimmed, entry, aliases: aliases).matched
+            }
+        }
+
+        if !updatedProfiles[targetIndex].apps.contains(where: { $0.localizedCaseInsensitiveCompare(trimmed) == .orderedSame }) {
+            updatedProfiles[targetIndex].apps.append(trimmed)
+        }
+
+        config.profiles = updatedProfiles
+        save()
+    }
 }
 
 struct SettingsView: View {
@@ -75,12 +106,27 @@ struct SettingsView: View {
     @State private var selectedTab: ProfileTab = .targetApps
 
     var body: some View {
+        let aliases = ProfileConflictDetector.runningAppAliases()
         NavigationView {
             VStack(spacing: 0) {
                 List(selection: $store.selectedProfileId) {
                     ForEach(store.config.profiles) { profile in
-                        Text(profile.name)
-                            .tag(profile.id)
+                        HStack(spacing: 6) {
+                            Text(profile.name)
+                                .lineLimit(1)
+                            Spacer()
+                            if ProfileConflictDetector.profileHasWarnings(
+                                profileId: profile.id,
+                                profiles: store.config.profiles,
+                                aliases: aliases
+                            ) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.orange)
+                                    .help("此設定檔有 App 重疊或規則衝突")
+                            }
+                        }
+                        .tag(profile.id)
                     }
                     .onMove { indices, newOffset in
                         store.config.profiles.move(fromOffsets: indices, toOffset: newOffset)
@@ -88,6 +134,13 @@ struct SettingsView: View {
                     }
                 }
                 .listStyle(SidebarListStyle())
+
+                Text("優先順序由上而下，可拖曳調整")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
 
                 Divider()
 
@@ -134,6 +187,7 @@ struct SettingsView: View {
             if let selectedId = store.selectedProfileId,
                let selectedProfile = store.profile(for: selectedId) {
                 ProfileDetailView(
+                    store: store,
                     profile: store.binding(for: selectedId, fallback: selectedProfile),
                     selectedTab: $selectedTab,
                     onSave: {
@@ -177,6 +231,7 @@ struct SettingsView: View {
 }
 
 struct ProfileDetailView: View {
+    @ObservedObject var store: SettingsStore
     @Binding var profile: ShuttleProfile
     @Binding var selectedTab: ProfileTab
     var onSave: () -> Void
@@ -185,7 +240,8 @@ struct ProfileDetailView: View {
     @State private var syncedProfileId: UUID
     @FocusState private var isNameFocused: Bool
 
-    init(profile: Binding<ShuttleProfile>, selectedTab: Binding<ProfileTab>, onSave: @escaping () -> Void) {
+    init(store: SettingsStore, profile: Binding<ShuttleProfile>, selectedTab: Binding<ProfileTab>, onSave: @escaping () -> Void) {
+        self.store = store
         self._profile = profile
         self._selectedTab = selectedTab
         self.onSave = onSave
@@ -233,7 +289,7 @@ struct ProfileDetailView: View {
             Divider()
 
             TabView(selection: $selectedTab) {
-                TargetAppsView(profile: $profile, onSave: onSave, newApp: $newApp)
+                TargetAppsView(store: store, profile: $profile, onSave: onSave, newApp: $newApp)
                     .tabItem { Text("Target Apps") }
                     .tag(ProfileTab.targetApps)
 
@@ -262,10 +318,19 @@ struct ProfileDetailView: View {
     }
 }
 
+private struct PendingAppConflict {
+    let appIdentifier: String
+    let conflictingProfileNames: [String]
+    let clearInputAfterAction: Bool
+}
+
 struct TargetAppsView: View {
+    @ObservedObject var store: SettingsStore
     @Binding var profile: ShuttleProfile
     var onSave: () -> Void
     @Binding var newApp: String
+    @State private var pendingConflict: PendingAppConflict?
+    @State private var showConflictAlert: Bool = false
 
     private var runningApps: [(name: String, identifier: String)] {
         let selfBundleId = Bundle.main.bundleIdentifier ?? ""
@@ -283,37 +348,74 @@ struct TargetAppsView: View {
     }
 
     var body: some View {
+        let aliases = ProfileConflictDetector.runningAppAliases()
+
         VStack(alignment: .leading, spacing: 10) {
             Text("Target Application Names or Bundle IDs (case-insensitive)")
                 .font(.caption)
                 .foregroundColor(.secondary)
 
+            if ProfileConflictDetector.hasMixedWildcard(in: profile) {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                        .font(.system(size: 12))
+                        .padding(.top, 1)
+                    Text("此設定檔同時包含萬用字元 `*` 與特定 App，系統會將整個設定檔視為全域預設（Global Fallback），其他特定 App 不會在第一輪被優先比對。")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.orange.opacity(0.1))
+                .cornerRadius(6)
+            }
+
             List {
                 ForEach(profile.apps, id: \.self) { app in
-                    HStack {
-                        Text(app)
-                        Spacer()
-                        Button(action: {
-                            removeApp(app)
-                        }) {
-                            Image(nsImage: NSImage(named: NSImage.stopProgressTemplateName)!)
-                                .foregroundColor(.secondary)
+                    let overlaps = ProfileConflictDetector.overlaps(
+                        for: app,
+                        in: profile.id,
+                        profiles: store.config.profiles,
+                        aliases: aliases
+                    )
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack {
+                            Text(app)
+                            Spacer()
+                            Button(action: {
+                                removeApp(app)
+                            }) {
+                                Image(nsImage: NSImage(named: NSImage.stopProgressTemplateName)!)
+                                    .foregroundColor(.secondary)
+                            }
+                            .buttonStyle(BorderlessButtonStyle())
+                            .help("Remove App")
                         }
-                        .buttonStyle(BorderlessButtonStyle())
-                        .help("Remove App")
+
+                        ForEach(overlaps) { info in
+                            HStack(spacing: 4) {
+                                Image(systemName: info.isWarning ? "exclamationmark.triangle.fill" : "info.circle")
+                                    .font(.system(size: 10))
+                                Text(overlapMessage(for: info))
+                                    .font(.caption2)
+                            }
+                            .foregroundColor(info.isWarning ? .orange : .secondary)
+                        }
                     }
+                    .padding(.vertical, 2)
                 }
             }
             .border(Color(NSColor.separatorColor), width: 1)
 
             HStack {
                 TextField("Add App or Bundle ID (e.g. Chrome, com.google.Chrome)", text: $newApp, onCommit: {
-                    addApp(newApp)
+                    addApp(newApp, fromInputField: true)
                 })
                 .textFieldStyle(RoundedBorderTextFieldStyle())
 
                 Button("Add") {
-                    addApp(newApp)
+                    addApp(newApp, fromInputField: true)
                 }
 
                 Menu("從執行中程式加入") {
@@ -350,16 +452,80 @@ struct TargetAppsView: View {
             .disabled(profile.apps.contains("*"))
         }
         .padding()
+        .alert(
+            "應用程式已在其他設定檔中",
+            isPresented: $showConflictAlert,
+            presenting: pendingConflict
+        ) { conflict in
+            Button("移動至此設定檔") {
+                let aliases = ProfileConflictDetector.runningAppAliases()
+                store.moveApp(conflict.appIdentifier, to: profile.id, aliases: aliases)
+                if conflict.clearInputAfterAction {
+                    newApp = ""
+                }
+                pendingConflict = nil
+            }
+            Button("兩邊都保留") {
+                store.addApp(conflict.appIdentifier, to: profile.id)
+                if conflict.clearInputAfterAction {
+                    newApp = ""
+                }
+                pendingConflict = nil
+            }
+            Button("取消", role: .cancel) {
+                pendingConflict = nil
+            }
+        } message: { conflict in
+            let names = conflict.conflictingProfileNames.joined(separator: "、")
+            Text("「\(conflict.appIdentifier)」已出現在其他設定檔（\(names)）中。\n若兩邊都保留，將依左側設定檔由上而下的順序優先套用。")
+        }
     }
 
-    func addApp(_ raw: String) {
+    private func overlapMessage(for info: AppOverlapInfo) -> String {
+        let aliasSuffix = info.isAliasMatch ? "（對應: \(info.matchedEntry)）" : ""
+        switch info.kind {
+        case .shadowedByHigher:
+            return "已被上方的「\(info.otherProfileName)」覆蓋（目前不會生效）\(aliasSuffix)"
+        case .shadowedExceptHover:
+            return "前景已被上方的「\(info.otherProfileName)」覆蓋，僅游標懸停時由此設定檔生效\(aliasSuffix)"
+        case .overriddenOnHoverByLower:
+            return "優先於下方的「\(info.otherProfileName)」，但游標懸停時會由對方搶走控制權\(aliasSuffix)"
+        case .shadowsLower:
+            return "與下方的「\(info.otherProfileName)」重疊（目前以此設定檔優先）\(aliasSuffix)"
+        }
+    }
+
+    func addApp(_ raw: String, fromInputField: Bool = false) {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        if !profile.apps.contains(where: { $0.localizedCaseInsensitiveCompare(trimmed) == .orderedSame }) {
-            profile.apps.append(trimmed)
-            onSave()
+
+        if profile.apps.contains(where: { $0.localizedCaseInsensitiveCompare(trimmed) == .orderedSame }) {
+            if fromInputField {
+                newApp = ""
+            }
+            return
         }
-        if raw == newApp {
+
+        let aliases = ProfileConflictDetector.runningAppAliases()
+        let conflicts = ProfileConflictDetector.conflictingProfiles(
+            for: trimmed,
+            excluding: profile.id,
+            profiles: store.config.profiles,
+            aliases: aliases
+        )
+
+        if !conflicts.isEmpty {
+            pendingConflict = PendingAppConflict(
+                appIdentifier: trimmed,
+                conflictingProfileNames: conflicts.map { $0.profile.name },
+                clearInputAfterAction: fromInputField
+            )
+            showConflictAlert = true
+            return
+        }
+
+        store.addApp(trimmed, to: profile.id)
+        if fromInputField {
             newApp = ""
         }
     }

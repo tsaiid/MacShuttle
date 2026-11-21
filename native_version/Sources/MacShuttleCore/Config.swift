@@ -70,6 +70,172 @@ struct ShuttleConfig: Codable, Hashable {
     var profiles: [ShuttleProfile]
 }
 
+struct AppAlias: Equatable {
+    let name: String
+    let bundleId: String
+}
+
+struct AppOverlapInfo: Equatable, Identifiable {
+    enum Kind: Equatable {
+        case shadowedByHigher
+        case shadowedExceptHover
+        case overriddenOnHoverByLower
+        case shadowsLower
+    }
+
+    let id: String
+    let otherProfileId: UUID
+    let otherProfileName: String
+    let matchedEntry: String
+    let kind: Kind
+    let isAliasMatch: Bool
+
+    var isWarning: Bool {
+        switch kind {
+        case .shadowedByHigher, .shadowedExceptHover, .overriddenOnHoverByLower:
+            return true
+        case .shadowsLower:
+            return false
+        }
+    }
+}
+
+enum ProfileConflictDetector {
+    static func runningAppAliases() -> [AppAlias] {
+        NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular }
+            .compactMap { app in
+                let name = app.localizedName ?? ""
+                let bundleId = app.bundleIdentifier ?? ""
+                guard !name.isEmpty, !bundleId.isEmpty else { return nil }
+                return AppAlias(name: name, bundleId: bundleId)
+            }
+    }
+
+    static func entriesMatch(_ lhs: String, _ rhs: String, aliases: [AppAlias] = []) -> (matched: Bool, isAlias: Bool) {
+        if lhs.localizedCaseInsensitiveCompare(rhs) == .orderedSame {
+            return (true, false)
+        }
+        guard lhs != "*", rhs != "*" else {
+            return (false, false)
+        }
+        for alias in aliases {
+            let lhsMatchesName = lhs.localizedCaseInsensitiveCompare(alias.name) == .orderedSame
+            let lhsMatchesBundle = lhs.localizedCaseInsensitiveCompare(alias.bundleId) == .orderedSame
+            let rhsMatchesName = rhs.localizedCaseInsensitiveCompare(alias.name) == .orderedSame
+            let rhsMatchesBundle = rhs.localizedCaseInsensitiveCompare(alias.bundleId) == .orderedSame
+            if (lhsMatchesName && rhsMatchesBundle) || (lhsMatchesBundle && rhsMatchesName) {
+                return (true, true)
+            }
+        }
+        return (false, false)
+    }
+
+    static func hasMixedWildcard(in profile: ShuttleProfile) -> Bool {
+        profile.apps.contains("*") && profile.apps.count > 1
+    }
+
+    static func overlaps(
+        for appEntry: String,
+        in profileId: UUID,
+        profiles: [ShuttleProfile],
+        aliases: [AppAlias] = []
+    ) -> [AppOverlapInfo] {
+        guard let myIndex = profiles.firstIndex(where: { $0.id == profileId }) else { return [] }
+        let me = profiles[myIndex]
+        let isWildcard = (appEntry == "*")
+
+        if !isWildcard && me.apps.contains("*") {
+            return []
+        }
+
+        var results: [AppOverlapInfo] = []
+
+        for (otherIndex, other) in profiles.enumerated() {
+            if other.id == profileId { continue }
+
+            if isWildcard {
+                guard other.apps.contains("*") else { continue }
+                let kind: AppOverlapInfo.Kind = otherIndex < myIndex ? .shadowedByHigher : .shadowsLower
+                results.append(AppOverlapInfo(
+                    id: "\(other.id.uuidString)-*",
+                    otherProfileId: other.id,
+                    otherProfileName: other.name,
+                    matchedEntry: "*",
+                    kind: kind,
+                    isAliasMatch: false
+                ))
+            } else {
+                if other.apps.contains("*") { continue }
+
+                for otherEntry in other.apps {
+                    let check = entriesMatch(appEntry, otherEntry, aliases: aliases)
+                    guard check.matched else { continue }
+
+                    let kind: AppOverlapInfo.Kind
+                    if otherIndex < myIndex {
+                        if !other.hoverPriority && me.hoverPriority {
+                            kind = .shadowedExceptHover
+                        } else {
+                            kind = .shadowedByHigher
+                        }
+                    } else {
+                        if !me.hoverPriority && other.hoverPriority {
+                            kind = .overriddenOnHoverByLower
+                        } else {
+                            kind = .shadowsLower
+                        }
+                    }
+
+                    results.append(AppOverlapInfo(
+                        id: "\(other.id.uuidString)-\(otherEntry.lowercased())",
+                        otherProfileId: other.id,
+                        otherProfileName: other.name,
+                        matchedEntry: otherEntry,
+                        kind: kind,
+                        isAliasMatch: check.isAlias
+                    ))
+                    break
+                }
+            }
+        }
+
+        return results
+    }
+
+    static func conflictingProfiles(
+        for candidateApp: String,
+        excluding profileId: UUID,
+        profiles: [ShuttleProfile],
+        aliases: [AppAlias] = []
+    ) -> [(profile: ShuttleProfile, matchedEntries: [String])] {
+        let trimmed = candidateApp.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+
+        var conflicts: [(profile: ShuttleProfile, matchedEntries: [String])] = []
+        for other in profiles where other.id != profileId {
+            let matched = other.apps.filter { entriesMatch(trimmed, $0, aliases: aliases).matched }
+            if !matched.isEmpty {
+                conflicts.append((profile: other, matchedEntries: matched))
+            }
+        }
+        return conflicts
+    }
+
+    static func profileHasWarnings(
+        profileId: UUID,
+        profiles: [ShuttleProfile],
+        aliases: [AppAlias] = []
+    ) -> Bool {
+        guard let profile = profiles.first(where: { $0.id == profileId }) else { return false }
+        if hasMixedWildcard(in: profile) { return true }
+        return profile.apps.contains { appEntry in
+            overlaps(for: appEntry, in: profileId, profiles: profiles, aliases: aliases)
+                .contains { $0.isWarning }
+        }
+    }
+}
+
 let defaultSpeeds = [800, 600, 333, 200, 100, 50, 20]
 
 let defaultProfileWindows = ShuttleProfile(

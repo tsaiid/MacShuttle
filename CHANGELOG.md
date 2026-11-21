@@ -5,6 +5,15 @@ All notable changes to **MacShuttle** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-11-22
+
+### Added
+- **跨 Profile App 重疊防呆與衝突提示 (`ProfileConflictDetector`)**：
+  - 保留多套 Profile 依側邊欄順序切換的彈性，並於側邊欄新增「優先順序由上而下，可拖曳調整」提示與衝突 ⚠️ 標記。
+  - 在 `Target Apps` 清單中即時顯示行內提示：包含順序覆蓋（被上方覆蓋 / 優先於下方）、`Hover Priority` 跨 Profile 搶佔提示、執行中 App 的 Name ↔ Bundle ID 隱性重疊偵測，以及同 Profile 混用 `*` 與特定 App 的警示橫幅。
+  - 透過輸入、「從執行中程式加入」或「瀏覽...」新增重複 App 時，彈出對話框提供「移動至此設定檔」、「兩邊都保留」或「取消」。
+- **單元測試補強**：新增 `ProfileConflictDetectorTests`（5 項測試，共 17 項 `XCTest` 測試）。
+
 ## [1.0.1] - 2026-11-22
 
 ### Fixed
