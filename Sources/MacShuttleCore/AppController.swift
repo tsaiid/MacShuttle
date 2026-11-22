@@ -147,6 +147,20 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
         updateIcon(connected: false)
         buildMenu()
 
+        // Setup Shuttle Scroll Engine callback
+        scrollEngine.onScroll = { [weak self] direction in
+            guard let self = self else { return }
+            let profile = self.resolveEffectiveContext().profile
+            let mode = profile?.shuttleMode ?? .scroll
+            let inverted = profile?.shuttleInvert ?? false
+            InputController.shared.performWheelAction(
+                mode: mode,
+                direction: direction,
+                inverted: inverted,
+                scrollMultiplier: 2
+            )
+        }
+
         // Setup HID
         shuttleDevice = ShuttleDevice()
         shuttleDevice.delegate = self
@@ -395,7 +409,7 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
 
         let window = NSWindow(contentViewController: hostingController)
         window.title = "Preferences"
-        window.setContentSize(NSSize(width: 800, height: 600))
+        window.setContentSize(NSSize(width: 800, height: 700))
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.center()
         window.isReleasedWhenClosed = false
@@ -573,10 +587,18 @@ class AppController: NSObject, NSApplicationDelegate, ShuttleDeviceDelegate, NSM
         else if diff < -127 { diff += 256 }
 
         if diff != 0 {
+            let context = resolveEffectiveContext()
+            let mode = context.profile?.jogMode ?? .scroll
+            let inverted = context.profile?.jogInvert ?? false
             let direction = diff > 0 ? 1 : -1
             let steps = min(abs(diff), 5)
             for _ in 0..<steps {
-                InputController.shared.performScroll(direction: direction, multiplier: 3)
+                InputController.shared.performWheelAction(
+                    mode: mode,
+                    direction: direction,
+                    inverted: inverted,
+                    scrollMultiplier: 3
+                )
             }
         }
     }

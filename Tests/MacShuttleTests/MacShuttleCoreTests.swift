@@ -128,11 +128,59 @@ final class ConfigDecodingTests: XCTestCase {
         let profile = config.profiles[0]
         XCTAssertEqual(profile.name, "Legacy")
         XCTAssertFalse(profile.hoverPriority)
+        XCTAssertEqual(profile.jogMode, .scroll)
+        XCTAssertFalse(profile.jogInvert)
+        XCTAssertEqual(profile.shuttleMode, .scroll)
+        XCTAssertFalse(profile.shuttleInvert)
         XCTAssertEqual(profile.speeds.count, 7)
         XCTAssertEqual(profile.speeds[0], 1)
         XCTAssertEqual(profile.speeds[1], 1)
         XCTAssertEqual(profile.speeds[2], 300)
         XCTAssertEqual(profile.speeds[3], defaultSpeeds[3])
+    }
+
+    func testWheelActionModeEncodingAndDecoding() throws {
+        let profile = ShuttleProfile(
+            name: "Browser Video",
+            apps: ["com.google.Chrome"],
+            speeds: defaultSpeeds,
+            buttons: [:],
+            jogMode: .upDown,
+            jogInvert: true,
+            shuttleMode: .leftRight,
+            shuttleInvert: false
+        )
+        let data = try JSONEncoder().encode(ShuttleConfig(profiles: [profile]))
+        let decoded = try JSONDecoder().decode(ShuttleConfig.self, from: data)
+        XCTAssertEqual(decoded.profiles.count, 1)
+        XCTAssertEqual(decoded.profiles[0].jogMode, .upDown)
+        XCTAssertTrue(decoded.profiles[0].jogInvert)
+        XCTAssertEqual(decoded.profiles[0].shuttleMode, .leftRight)
+        XCTAssertFalse(decoded.profiles[0].shuttleInvert)
+    }
+
+    func testWheelActionModeKeyMappingAndInvert() {
+        // Scroll returns nil (handled by performScroll)
+        XCTAssertNil(WheelActionMode.scroll.keyName(for: 1, inverted: false))
+        XCTAssertNil(WheelActionMode.scroll.keyName(for: -1, inverted: true))
+
+        // Up / Down: normal CW = down, CCW = up; inverted CW = up (volume up), CCW = down (volume down)
+        XCTAssertEqual(WheelActionMode.upDown.keyName(for: 1, inverted: false), "down")
+        XCTAssertEqual(WheelActionMode.upDown.keyName(for: -1, inverted: false), "up")
+        XCTAssertEqual(WheelActionMode.upDown.keyName(for: 1, inverted: true), "up")
+        XCTAssertEqual(WheelActionMode.upDown.keyName(for: -1, inverted: true), "down")
+
+        // Left / Right
+        XCTAssertEqual(WheelActionMode.leftRight.keyName(for: 1, inverted: false), "right")
+        XCTAssertEqual(WheelActionMode.leftRight.keyName(for: -1, inverted: false), "left")
+        XCTAssertEqual(WheelActionMode.leftRight.keyName(for: 1, inverted: true), "left")
+        XCTAssertEqual(WheelActionMode.leftRight.keyName(for: -1, inverted: true), "right")
+
+        // Page Up / Page Down
+        XCTAssertEqual(WheelActionMode.pageUpDown.keyName(for: 1, inverted: false), "pagedown")
+        XCTAssertEqual(WheelActionMode.pageUpDown.keyName(for: -1, inverted: false), "pageup")
+        XCTAssertEqual(WheelActionMode.pageUpDown.keyName(for: 1, inverted: true), "pageup")
+        XCTAssertEqual(WheelActionMode.pageUpDown.keyName(for: -1, inverted: true), "pagedown")
     }
 
     func testProfileMatchingAndHoverOnlyFilter() {

@@ -16,6 +16,55 @@ enum AppVersion {
     }
 }
 
+enum WheelActionMode: String, Codable, CaseIterable, Hashable, Identifiable {
+    case scroll
+    case upDown
+    case leftRight
+    case pageUpDown
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .scroll: return "Scroll (Vertical)"
+        case .upDown: return "Up / Down"
+        case .leftRight: return "Left / Right"
+        case .pageUpDown: return "Page Up / Page Down"
+        }
+    }
+
+    /// 根據轉動方向（+1 順時針 CW / -1 逆時針 CCW）與是否反轉，決定要送出的按鍵名稱；
+    /// 若為 .scroll 模式則回傳 nil。
+    func keyName(for direction: Int, inverted: Bool) -> String? {
+        let effectiveDirection = inverted ? -direction : direction
+        let isClockwise = effectiveDirection > 0
+        switch self {
+        case .scroll:
+            return nil
+        case .upDown:
+            return isClockwise ? "down" : "up"
+        case .leftRight:
+            return isClockwise ? "right" : "left"
+        case .pageUpDown:
+            return isClockwise ? "pagedown" : "pageup"
+        }
+    }
+
+    /// 取得 UI 顯示用的逆時針 (↺) 與順時針 (↻) 對應提示文字
+    func directionHint(inverted: Bool) -> String {
+        switch self {
+        case .scroll:
+            return inverted ? "↺ 往下捲 / ↻ 往上捲" : "↺ 往上捲 / ↻ 往下捲"
+        case .upDown:
+            return inverted ? "↺ ↓ / ↻ ↑" : "↺ ↑ / ↻ ↓"
+        case .leftRight:
+            return inverted ? "↺ → / ↻ ←" : "↺ ← / ↻ →"
+        case .pageUpDown:
+            return inverted ? "↺ PageDown / ↻ PageUp" : "↺ PageUp / ↻ PageDown"
+        }
+    }
+}
+
 struct ShuttleProfile: Codable, Hashable, Identifiable {
     var id = UUID()
     var name: String
@@ -23,18 +72,37 @@ struct ShuttleProfile: Codable, Hashable, Identifiable {
     var speeds: [Int] // 7 levels, in ms
     var buttons: [String: String] // "1": "cmd+c"
     var hoverPriority: Bool = false
+    var jogMode: WheelActionMode = .scroll
+    var jogInvert: Bool = false
+    var shuttleMode: WheelActionMode = .scroll
+    var shuttleInvert: Bool = false
 
     enum CodingKeys: String, CodingKey {
         case id, name, apps, speeds, buttons, hoverPriority
+        case jogMode, jogInvert, shuttleMode, shuttleInvert
     }
 
-    init(name: String, apps: [String], speeds: [Int], buttons: [String: String], hoverPriority: Bool = false) {
+    init(
+        name: String,
+        apps: [String],
+        speeds: [Int],
+        buttons: [String: String],
+        hoverPriority: Bool = false,
+        jogMode: WheelActionMode = .scroll,
+        jogInvert: Bool = false,
+        shuttleMode: WheelActionMode = .scroll,
+        shuttleInvert: Bool = false
+    ) {
         self.id = UUID()
         self.name = name
         self.apps = apps
         self.speeds = ShuttleProfile.normalizeSpeeds(speeds)
         self.buttons = buttons
         self.hoverPriority = hoverPriority
+        self.jogMode = jogMode
+        self.jogInvert = jogInvert
+        self.shuttleMode = shuttleMode
+        self.shuttleInvert = shuttleInvert
     }
 
     init(from decoder: Decoder) throws {
@@ -47,6 +115,10 @@ struct ShuttleProfile: Codable, Hashable, Identifiable {
         // Use existing ID if present, otherwise generate new one
         id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         hoverPriority = try container.decodeIfPresent(Bool.self, forKey: .hoverPriority) ?? false
+        jogMode = try container.decodeIfPresent(WheelActionMode.self, forKey: .jogMode) ?? .scroll
+        jogInvert = try container.decodeIfPresent(Bool.self, forKey: .jogInvert) ?? false
+        shuttleMode = try container.decodeIfPresent(WheelActionMode.self, forKey: .shuttleMode) ?? .scroll
+        shuttleInvert = try container.decodeIfPresent(Bool.self, forKey: .shuttleInvert) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -57,6 +129,10 @@ struct ShuttleProfile: Codable, Hashable, Identifiable {
         try container.encode(speeds, forKey: .speeds)
         try container.encode(buttons, forKey: .buttons)
         try container.encode(hoverPriority, forKey: .hoverPriority)
+        try container.encode(jogMode, forKey: .jogMode)
+        try container.encode(jogInvert, forKey: .jogInvert)
+        try container.encode(shuttleMode, forKey: .shuttleMode)
+        try container.encode(shuttleInvert, forKey: .shuttleInvert)
     }
 
     static func normalizeSpeeds(_ raw: [Int]) -> [Int] {

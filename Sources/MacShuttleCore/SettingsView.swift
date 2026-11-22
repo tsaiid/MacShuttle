@@ -4,7 +4,7 @@ import Combine
 enum ProfileTab: Hashable {
     case targetApps
     case buttons
-    case shuttleSpeeds
+    case jogAndShuttle
 }
 
 class SettingsStore: ObservableObject {
@@ -200,7 +200,7 @@ struct SettingsView: View {
                     .foregroundColor(.secondary)
             }
         }
-        .frame(minWidth: 800, minHeight: 600)
+        .frame(minWidth: 800, minHeight: 700)
         .onAppear {
             if store.config.profiles.isEmpty {
                 let defaultProfile = ShuttleProfile(
@@ -297,9 +297,9 @@ struct ProfileDetailView: View {
                     .tabItem { Text("Buttons") }
                     .tag(ProfileTab.buttons)
 
-                ShuttleSpeedsView(profile: $profile, onSave: onSave)
-                    .tabItem { Text("Shuttle Speeds") }
-                    .tag(ProfileTab.shuttleSpeeds)
+                JogAndShuttleView(profile: $profile, onSave: onSave)
+                    .tabItem { Text("Jog & Shuttle") }
+                    .tag(ProfileTab.jogAndShuttle)
             }
             .padding()
         }
@@ -779,13 +779,57 @@ struct ButtonsView: View {
     }
 }
 
-struct ShuttleSpeedsView: View {
+struct JogAndShuttleView: View {
     @Binding var profile: ShuttleProfile
     var onSave: () -> Void
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("輪盤輸出模式 (Wheel Actions)")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    WheelActionRow(
+                        title: "Jog Wheel (內圈)",
+                        mode: Binding(
+                            get: { profile.jogMode },
+                            set: {
+                                profile.jogMode = $0
+                                onSave()
+                            }
+                        ),
+                        inverted: Binding(
+                            get: { profile.jogInvert },
+                            set: {
+                                profile.jogInvert = $0
+                                onSave()
+                            }
+                        )
+                    )
+
+                    WheelActionRow(
+                        title: "Shuttle Wheel (外圈)",
+                        mode: Binding(
+                            get: { profile.shuttleMode },
+                            set: {
+                                profile.shuttleMode = $0
+                                onSave()
+                            }
+                        ),
+                        inverted: Binding(
+                            get: { profile.shuttleInvert },
+                            set: {
+                                profile.shuttleInvert = $0
+                                onSave()
+                            }
+                        )
+                    )
+                }
+
+                Divider()
+
                 HStack {
                     Text("Shuttle Speeds (Transition Delay in ms)")
                         .font(.headline)
@@ -816,6 +860,40 @@ struct ShuttleSpeedsView: View {
                 Spacer()
             }
             .padding()
+        }
+    }
+}
+
+struct WheelActionRow: View {
+    let title: String
+    @Binding var mode: WheelActionMode
+    @Binding var inverted: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 16) {
+                Text(title)
+                    .font(.system(size: 13, weight: .medium))
+                    .frame(width: 140, alignment: .leading)
+
+                Picker("", selection: $mode) {
+                    ForEach(WheelActionMode.allCases) { option in
+                        Text(option.displayName).tag(option)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 180)
+
+                Toggle("反轉方向 (Invert)", isOn: $inverted)
+                    .toggleStyle(.checkbox)
+
+                Spacer()
+            }
+
+            Text(mode.directionHint(inverted: inverted))
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.leading, 156)
         }
     }
 }

@@ -23,6 +23,15 @@ class InputController {
             event.post(tap: .cghidEventTap)
         }
     }
+
+    func performWheelAction(mode: WheelActionMode, direction: Int, inverted: Bool, scrollMultiplier: Int) {
+        if let key = mode.keyName(for: direction, inverted: inverted) {
+            performKey(keyDef: key)
+        } else {
+            let effectiveDirection = inverted ? -direction : direction
+            performScroll(direction: effectiveDirection, multiplier: scrollMultiplier)
+        }
+    }
     
     func performKey(keyDef: String) {
         let (baseKey, modifiers) = parseKeyDefinition(keyDef)

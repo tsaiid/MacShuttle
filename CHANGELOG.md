@@ -5,6 +5,18 @@ All notable changes to **MacShuttle** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-11-22
+
+### Added
+- **Jog 與 Shuttle 獨立輸出模式與方向反轉 (`WheelActionMode`)**：
+  - 每個 Profile 可分別設定 **Jog Wheel (內圈)** 與 **Shuttle Wheel (外圈)** 的輸出模式，支援 `Scroll (Vertical)`、`Up / Down`、`Left / Right`、`Page Up / Page Down`，並向下相容舊版 `shuttle_config.json`。
+  - 新增「反轉方向 (Invert)」開關與即時 `↺ / ↻` 方向提示，方便依情境反轉順／逆時針對應（例如以 Jog 順時針調大網頁影片音量）。
+  - 輪盤事件發送皆不自動切換前景視窗，避免干擾原本操作焦點。
+- **單元測試補強**：新增 `WheelActionMode` 編解碼、舊版 JSON 向下相容與各模式反轉映射測試（共 19 項 `XCTest` 測試）。
+
+### Changed
+- **偏好設定介面調整**：將第三個分頁 `Shuttle Speeds` 改名為 `Jog & Shuttle`，並將偏好設定視窗預設與最小高度由 `600` 調整為 `700`，完整顯示輪盤設定與 7 段速度清單。
+
 ## [1.1.0] - 2026-11-22
 
 ### Added
