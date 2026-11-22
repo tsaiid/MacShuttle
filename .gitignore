@@ -1,7 +1,21 @@
-# IDE settings
+# macOS & IDE
+.DS_Store
 .vscode/
 .idea/
-.DS_Store
+xcuserdata/
+DerivedData/
+
+# Swift Package Manager
+/.build
+/Packages
+.swiftpm/configuration/registries.json
+.swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
+.netrc
+
+# Build Artifacts & Local Config
+/MacShuttle.app/
+/MacShuttleNative
+shuttle_config.json
 
 # Logs
 *.log

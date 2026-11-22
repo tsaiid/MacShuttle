@@ -4,7 +4,7 @@ set -e
 # Config
 APP_NAME="MacShuttle"
 APP_BUNDLE="${APP_NAME}.app"
-# Since we are running this script inside native_version/, the build dir is relative to here
+# Build dir relative to package root
 BUILD_DIR=".build/release"
 BINARY_NAME="MacShuttle"
 
@@ -56,4 +56,4 @@ tccutil reset Accessibility com.tsaiid.MacShuttle || true
 
 echo "✅ Build Complete."
 echo "🚀 You can now move '${APP_BUNDLE}' to your /Applications folder."
-echo "   Or run: open native_version/${APP_BUNDLE}"
+echo "   Or run: open ${APP_BUNDLE}"
